@@ -305,3 +305,40 @@ it('filters class sections by search and enrollment status', function () {
         ->assertOk()
         ->assertJson(fn ($json) => $json->where('total', 2)->etc());
 });
+
+it('allows registrar to delete an empty class section', function () {
+    $registrar = classSectionRegistrar();
+    $teacher = classSectionTeacher();
+    $section = makeClassSectionCatalog(['teacher_id' => $teacher->id, 'section' => 'Z']);
+
+    $this->actingAs($registrar, 'sanctum')
+        ->deleteJson("/api/class-sections/{$section->id}")
+        ->assertOk()
+        ->assertJsonPath('message', 'Class section deleted.');
+
+    expect(ClassSection::find($section->id))->toBeNull();
+});
+
+it('blocks deleting a class section with enrolled students', function () {
+    $registrar = classSectionRegistrar();
+    $teacher = classSectionTeacher();
+    $section = makeClassSectionCatalog(['teacher_id' => $teacher->id, 'section' => 'Y']);
+    attachEnrollmentToSection($section);
+
+    $this->actingAs($registrar, 'sanctum')
+        ->deleteJson("/api/class-sections/{$section->id}")
+        ->assertUnprocessable()
+        ->assertJsonPath('usage.can_delete', false)
+        ->assertJsonPath('usage.enrolled_students', 1);
+
+    expect(ClassSection::find($section->id))->not->toBeNull();
+});
+
+it('forbids teachers from deleting class sections', function () {
+    $teacher = classSectionTeacher();
+    $section = makeClassSectionCatalog(['teacher_id' => $teacher->id, 'section' => 'X']);
+
+    $this->actingAs($teacher, 'sanctum')
+        ->deleteJson("/api/class-sections/{$section->id}")
+        ->assertForbidden();
+});

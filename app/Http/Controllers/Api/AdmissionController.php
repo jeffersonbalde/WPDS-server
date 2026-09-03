@@ -321,6 +321,24 @@ class AdmissionController extends Controller
         ]));
     }
 
+    public function destroy(Admission $admission): JsonResponse
+    {
+        $usage = $this->deleteUsagePayload($admission);
+
+        if (! $usage['can_delete']) {
+            return response()->json([
+                'message' => 'This admission cannot be deleted because grades are already recorded. Mark it as Withdrawn instead.',
+                'usage' => $usage,
+            ], 422);
+        }
+
+        DB::transaction(function () use ($admission) {
+            $admission->delete();
+        });
+
+        return response()->json(['message' => 'Admission deleted.']);
+    }
+
     public function enrollSubjects(Request $request, Admission $admission): JsonResponse
     {
         $data = $request->validate([
@@ -410,5 +428,40 @@ class AdmissionController extends Controller
         }
 
         return implode(' · ', $parts);
+    }
+
+    private function deleteUsagePayload(Admission $admission): array
+    {
+        $subjectCount = $admission->enrollmentSubjects()->count();
+        $hasGrades = $this->hasRecordedGrades($admission);
+
+        return [
+            'can_delete' => ! $hasGrades,
+            'has_recorded_grades' => $hasGrades,
+            'enrolled_subjects' => $subjectCount,
+            'status' => $admission->status,
+        ];
+    }
+
+    private function hasRecordedGrades(Admission $admission): bool
+    {
+        return Grade::query()
+            ->whereHas('enrollmentSubject', function ($q) use ($admission) {
+                $q->where('admission_id', $admission->id);
+            })
+            ->where(function ($q) {
+                $q->whereNotNull('prelim')
+                    ->orWhereNotNull('midterm')
+                    ->orWhereNotNull('semi_final')
+                    ->orWhereNotNull('final')
+                    ->orWhereNotNull('final_grade')
+                    ->orWhere(function ($inner) {
+                        $inner->whereNotNull('remarks')
+                            ->where('remarks', '!=', '');
+                    })
+                    ->orWhere('is_locked', true)
+                    ->orWhereNotNull('submitted_at');
+            })
+            ->exists();
     }
 }

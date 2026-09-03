@@ -232,22 +232,27 @@ class CurriculumController extends Controller
         $previewLimit = 12;
         $curriculum->load(['subject:id,code,title', 'program:id,code,name']);
 
-        $enrollments = EnrollmentSubject::query()
+        $enrollmentQuery = EnrollmentSubject::query()
             ->whereHas('classSection', fn ($q) => $q->where('subject_id', $curriculum->subject_id))
+            ->whereHas('admission', fn ($q) => $q->where('program_id', $curriculum->program_id));
+
+        $enrollmentsTotal = (clone $enrollmentQuery)->count();
+
+        $preview = (clone $enrollmentQuery)
             ->with([
                 'admission.studentProfile:id,student_no,last_name,first_name,middle_name',
                 'admission.schoolTerm:id,name',
                 'classSection:id,section',
             ])
             ->orderByDesc('id')
-            ->get();
-
-        $preview = $enrollments->take($previewLimit)->map(fn ($row) => [
-            'student_no' => $row->admission?->studentProfile?->student_no,
-            'name' => $row->admission?->studentProfile?->fullName(),
-            'term' => $row->admission?->schoolTerm?->name,
-            'section' => $row->classSection?->section,
-        ])->values()->all();
+            ->limit($previewLimit)
+            ->get()
+            ->map(fn ($row) => [
+                'student_no' => $row->admission?->studentProfile?->student_no,
+                'name' => $row->admission?->studentProfile?->fullName(),
+                'term' => $row->admission?->schoolTerm?->name,
+                'section' => $row->classSection?->section,
+            ])->values()->all();
 
         return [
             'program_code' => $curriculum->program?->code,
@@ -256,9 +261,9 @@ class CurriculumController extends Controller
             'subject_title' => $curriculum->subject?->title,
             'year_level' => $curriculum->year_level,
             'semester' => $curriculum->semester,
-            'has_enrolled_students' => $enrollments->isNotEmpty(),
+            'has_enrolled_students' => $enrollmentsTotal > 0,
             'enrollments' => [
-                'total' => $enrollments->count(),
+                'total' => $enrollmentsTotal,
                 'preview' => $preview,
             ],
         ];

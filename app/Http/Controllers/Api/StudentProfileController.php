@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Enums\UserRole;
 use App\Http\Controllers\Controller;
 use App\Models\StudentProfile;
 use App\Models\User;
@@ -153,7 +154,11 @@ class StudentProfileController extends Controller
 
     public function index(Request $request): JsonResponse
     {
-        $query = StudentProfile::with(['user', 'program', 'programMajor']);
+        $picker = $request->boolean('picker');
+
+        $query = $picker
+            ? StudentProfile::query()->with(['program:id,code,name,academic_level'])
+            : StudentProfile::with(['user', 'program', 'programMajor'])->withCount('admissions');
         $this->applyListFilters($query, $request);
 
         $perPage = min(100, max(10, (int) $request->query('per_page', 10)));
@@ -164,15 +169,25 @@ class StudentProfileController extends Controller
             ->paginate($perPage)
             ->appends($request->query());
 
-        $summary = [
-            'total' => StudentProfile::query()->count(),
-            'college' => StudentProfile::query()->where('academic_level', 'college')->count(),
-            'shs' => StudentProfile::query()->where('academic_level', 'shs')->count(),
-        ];
+        if (! $picker) {
+            $paginator->getCollection()->transform(function (StudentProfile $student) {
+                $student->setAttribute('can_delete', ((int) $student->admissions_count) === 0);
 
-        return response()->json(array_merge($paginator->toArray(), [
-            'summary' => $summary,
-        ]));
+                return $student;
+            });
+        }
+
+        $payload = $paginator->toArray();
+
+        if (! $picker) {
+            $payload['summary'] = [
+                'total' => StudentProfile::query()->count(),
+                'college' => StudentProfile::query()->where('academic_level', 'college')->count(),
+                'shs' => StudentProfile::query()->where('academic_level', 'shs')->count(),
+            ];
+        }
+
+        return response()->json($payload);
     }
 
     public function export(Request $request): StreamedResponse
@@ -634,6 +649,34 @@ class StudentProfileController extends Controller
             'admissions.programMajor',
             'admissions.enrollmentSubjects.classSection.subject',
         ]));
+    }
+
+    public function usage(StudentProfile $student): JsonResponse
+    {
+        return response()->json($student->deletionUsage());
+    }
+
+    public function destroy(StudentProfile $student): JsonResponse
+    {
+        $usage = $student->deletionUsage();
+        if (! $usage['can_delete']) {
+            return response()->json([
+                'message' => 'This student cannot be deleted because admission or grade records already exist. Use Edit Profile to correct details instead.',
+                'usage' => $usage,
+            ], 422);
+        }
+
+        DB::transaction(function () use ($student) {
+            $user = $student->user;
+            $student->delete();
+
+            if ($user && $user->hasRole([UserRole::Student, UserRole::Alumni])) {
+                $user->tokens()->delete();
+                $user->delete();
+            }
+        });
+
+        return response()->json(['message' => 'Student deleted.']);
     }
 
     public function myProfile(Request $request): JsonResponse

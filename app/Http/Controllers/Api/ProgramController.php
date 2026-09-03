@@ -212,62 +212,66 @@ class ProgramController extends Controller
     {
         $previewLimit = 12;
 
-        $students = $program->studentProfiles()
+        $studentsTotal = $program->studentProfiles()->count();
+        $admissionsTotal = $program->admissions()->count();
+        $curriculumTotal = $program->curriculumItems()->count();
+
+        $studentPreview = $program->studentProfiles()
             ->orderBy('last_name')
             ->orderBy('first_name')
-            ->get(['id', 'student_no', 'last_name', 'first_name', 'middle_name', 'year_level', 'section']);
+            ->limit($previewLimit)
+            ->get(['id', 'student_no', 'last_name', 'first_name', 'middle_name', 'year_level', 'section'])
+            ->map(fn ($student) => [
+                'student_no' => $student->student_no,
+                'name' => $student->fullName(),
+                'year_level' => $student->year_level,
+                'section' => $student->section,
+            ])->values()->all();
 
-        $admissions = $program->admissions()
+        $admissionPreview = $program->admissions()
             ->with([
                 'studentProfile:id,student_no,last_name,first_name,middle_name',
                 'schoolTerm:id,name',
             ])
             ->orderByDesc('id')
-            ->get();
+            ->limit($previewLimit)
+            ->get()
+            ->map(fn ($admission) => [
+                'admission_number' => $admission->admission_number,
+                'student_no' => $admission->studentProfile?->student_no,
+                'name' => $admission->studentProfile?->fullName(),
+                'term' => $admission->schoolTerm?->name,
+                'status' => $admission->status,
+            ])->values()->all();
 
-        $curriculum = $program->curriculumItems()
+        $curriculumPreview = $program->curriculumItems()
             ->with('subject:id,code,title')
             ->orderBy('year_level')
             ->orderBy('semester')
-            ->get();
-
-        $studentPreview = $students->take($previewLimit)->map(fn ($student) => [
-            'student_no' => $student->student_no,
-            'name' => $student->fullName(),
-            'year_level' => $student->year_level,
-            'section' => $student->section,
-        ])->values()->all();
-
-        $admissionPreview = $admissions->take($previewLimit)->map(fn ($admission) => [
-            'admission_number' => $admission->admission_number,
-            'student_no' => $admission->studentProfile?->student_no,
-            'name' => $admission->studentProfile?->fullName(),
-            'term' => $admission->schoolTerm?->name,
-            'status' => $admission->status,
-        ])->values()->all();
-
-        $curriculumPreview = $curriculum->take($previewLimit)->map(fn ($item) => [
-            'code' => $item->subject?->code,
-            'title' => $item->subject?->title,
-            'year_level' => $item->year_level,
-            'semester' => $item->semester,
-        ])->values()->all();
+            ->limit($previewLimit)
+            ->get()
+            ->map(fn ($item) => [
+                'code' => $item->subject?->code,
+                'title' => $item->subject?->title,
+                'year_level' => $item->year_level,
+                'semester' => $item->semester,
+            ])->values()->all();
 
         return [
             'code' => $program->code,
             'name' => $program->name,
-            'in_use' => $students->isNotEmpty() || $admissions->isNotEmpty() || $curriculum->isNotEmpty(),
-            'can_delete' => $students->isEmpty() && $admissions->isEmpty() && $curriculum->isEmpty(),
+            'in_use' => $studentsTotal > 0 || $admissionsTotal > 0 || $curriculumTotal > 0,
+            'can_delete' => $studentsTotal === 0 && $admissionsTotal === 0 && $curriculumTotal === 0,
             'students' => [
-                'total' => $students->count(),
+                'total' => $studentsTotal,
                 'preview' => $studentPreview,
             ],
             'admissions' => [
-                'total' => $admissions->count(),
+                'total' => $admissionsTotal,
                 'preview' => $admissionPreview,
             ],
             'curriculum' => [
-                'total' => $curriculum->count(),
+                'total' => $curriculumTotal,
                 'preview' => $curriculumPreview,
             ],
         ];
@@ -280,47 +284,50 @@ class ProgramController extends Controller
     {
         $previewLimit = 12;
 
-        $students = $major->studentProfiles()
+        $studentsTotal = $major->studentProfiles()->count();
+        $admissionsTotal = $major->admissions()->count();
+
+        $studentPreview = $major->studentProfiles()
             ->orderBy('last_name')
             ->orderBy('first_name')
-            ->get(['id', 'student_no', 'last_name', 'first_name', 'middle_name', 'year_level', 'section']);
+            ->limit($previewLimit)
+            ->get(['id', 'student_no', 'last_name', 'first_name', 'middle_name', 'year_level', 'section'])
+            ->map(fn ($student) => [
+                'student_no' => $student->student_no,
+                'name' => $student->fullName(),
+                'year_level' => $student->year_level,
+                'section' => $student->section,
+            ])->values()->all();
 
-        $admissions = $major->admissions()
+        $admissionPreview = $major->admissions()
             ->with([
                 'studentProfile:id,student_no,last_name,first_name,middle_name',
                 'schoolTerm:id,name',
             ])
             ->orderByDesc('id')
-            ->get();
-
-        $studentPreview = $students->take($previewLimit)->map(fn ($student) => [
-            'student_no' => $student->student_no,
-            'name' => $student->fullName(),
-            'year_level' => $student->year_level,
-            'section' => $student->section,
-        ])->values()->all();
-
-        $admissionPreview = $admissions->take($previewLimit)->map(fn ($admission) => [
-            'admission_number' => $admission->admission_number,
-            'student_no' => $admission->studentProfile?->student_no,
-            'name' => $admission->studentProfile?->fullName(),
-            'term' => $admission->schoolTerm?->name,
-            'status' => $admission->status,
-        ])->values()->all();
+            ->limit($previewLimit)
+            ->get()
+            ->map(fn ($admission) => [
+                'admission_number' => $admission->admission_number,
+                'student_no' => $admission->studentProfile?->student_no,
+                'name' => $admission->studentProfile?->fullName(),
+                'term' => $admission->schoolTerm?->name,
+                'status' => $admission->status,
+            ])->values()->all();
 
         return [
             'id' => $major->id,
             'code' => $major->code,
             'name' => $major->name,
             'label' => $major->label,
-            'in_use' => $students->isNotEmpty() || $admissions->isNotEmpty(),
-            'can_delete' => $students->isEmpty() && $admissions->isEmpty(),
+            'in_use' => $studentsTotal > 0 || $admissionsTotal > 0,
+            'can_delete' => $studentsTotal === 0 && $admissionsTotal === 0,
             'students' => [
-                'total' => $students->count(),
+                'total' => $studentsTotal,
                 'preview' => $studentPreview,
             ],
             'admissions' => [
-                'total' => $admissions->count(),
+                'total' => $admissionsTotal,
                 'preview' => $admissionPreview,
             ],
         ];

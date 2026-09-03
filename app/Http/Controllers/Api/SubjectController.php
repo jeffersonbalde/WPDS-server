@@ -210,20 +210,40 @@ class SubjectController extends Controller
     {
         $previewLimit = 12;
 
-        $curriculum = $subject->curriculumItems()
+        $curriculumTotal = $subject->curriculumItems()->count();
+        $classSectionsTotal = $subject->classSections()->count();
+        $enrollmentsTotal = EnrollmentSubject::query()
+            ->whereHas('classSection', fn ($q) => $q->where('subject_id', $subject->id))
+            ->count();
+
+        $curriculumPreview = $subject->curriculumItems()
             ->with('program:id,code,name')
             ->orderBy('program_id')
             ->orderBy('year_level')
             ->orderBy('semester')
-            ->get();
+            ->limit($previewLimit)
+            ->get()
+            ->map(fn ($item) => [
+                'code' => $subject->code,
+                'title' => $subject->title,
+                'program' => $item->program?->code,
+                'year_level' => $item->year_level,
+                'semester' => $item->semester,
+            ])->values()->all();
 
-        $classSections = $subject->classSections()
+        $sectionPreview = $subject->classSections()
             ->with('schoolTerm:id,name')
             ->withCount('enrollmentSubjects')
             ->orderByDesc('id')
-            ->get();
+            ->limit($previewLimit)
+            ->get()
+            ->map(fn ($section) => [
+                'term' => $section->schoolTerm?->name,
+                'section' => $section->section,
+                'enrolled' => (int) ($section->enrollment_subjects_count ?? 0),
+            ])->values()->all();
 
-        $enrollments = EnrollmentSubject::query()
+        $enrollmentPreview = EnrollmentSubject::query()
             ->whereHas('classSection', fn ($q) => $q->where('subject_id', $subject->id))
             ->with([
                 'admission.studentProfile:id,student_no,last_name,first_name,middle_name',
@@ -231,32 +251,18 @@ class SubjectController extends Controller
                 'classSection:id,section',
             ])
             ->orderByDesc('id')
-            ->get();
+            ->limit($previewLimit)
+            ->get()
+            ->map(fn ($row) => [
+                'student_no' => $row->admission?->studentProfile?->student_no,
+                'name' => $row->admission?->studentProfile?->fullName(),
+                'term' => $row->admission?->schoolTerm?->name,
+                'section' => $row->classSection?->section,
+            ])->values()->all();
 
-        $curriculumPreview = $curriculum->take($previewLimit)->map(fn ($item) => [
-            'code' => $subject->code,
-            'title' => $subject->title,
-            'program' => $item->program?->code,
-            'year_level' => $item->year_level,
-            'semester' => $item->semester,
-        ])->values()->all();
-
-        $sectionPreview = $classSections->take($previewLimit)->map(fn ($section) => [
-            'term' => $section->schoolTerm?->name,
-            'section' => $section->section,
-            'enrolled' => (int) ($section->enrollment_subjects_count ?? 0),
-        ])->values()->all();
-
-        $enrollmentPreview = $enrollments->take($previewLimit)->map(fn ($row) => [
-            'student_no' => $row->admission?->studentProfile?->student_no,
-            'name' => $row->admission?->studentProfile?->fullName(),
-            'term' => $row->admission?->schoolTerm?->name,
-            'section' => $row->classSection?->section,
-        ])->values()->all();
-
-        $hasCurriculum = $curriculum->isNotEmpty();
-        $hasSections = $classSections->isNotEmpty();
-        $hasEnrollments = $enrollments->isNotEmpty();
+        $hasCurriculum = $curriculumTotal > 0;
+        $hasSections = $classSectionsTotal > 0;
+        $hasEnrollments = $enrollmentsTotal > 0;
 
         return [
             'code' => $subject->code,
@@ -264,15 +270,15 @@ class SubjectController extends Controller
             'in_use' => $hasCurriculum || $hasSections || $hasEnrollments,
             'can_delete' => ! $hasCurriculum && ! $hasSections && ! $hasEnrollments,
             'curriculum' => [
-                'total' => $curriculum->count(),
+                'total' => $curriculumTotal,
                 'preview' => $curriculumPreview,
             ],
             'class_sections' => [
-                'total' => $classSections->count(),
+                'total' => $classSectionsTotal,
                 'preview' => $sectionPreview,
             ],
             'enrollments' => [
-                'total' => $enrollments->count(),
+                'total' => $enrollmentsTotal,
                 'preview' => $enrollmentPreview,
             ],
         ];

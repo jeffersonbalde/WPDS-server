@@ -185,3 +185,86 @@ it('forbids students from exporting admissions', function () {
         ->get('/api/admissions/export')
         ->assertForbidden();
 });
+
+it('allows registrar to delete an admission with empty grade shells', function () {
+    $admission = makeAdmissionForStatusTest('enrolled');
+    $subject = Subject::create([
+        'code' => 'CS 201',
+        'title' => 'Data Structures',
+        'academic_level' => 'college',
+        'units' => 3,
+        'is_active' => true,
+    ]);
+    $classSection = ClassSection::create([
+        'school_term_id' => $admission->school_term_id,
+        'subject_id' => $subject->id,
+        'section' => 'A',
+        'schedule_day' => 'TTH',
+        'schedule_time' => '9:00 AM',
+        'room' => 'LAB 2',
+    ]);
+    $enrollment = EnrollmentSubject::create([
+        'admission_id' => $admission->id,
+        'class_section_id' => $classSection->id,
+    ]);
+    Grade::create(['enrollment_subject_id' => $enrollment->id]);
+
+    $registrar = admissionRegistrar();
+
+    $this->actingAs($registrar, 'sanctum')
+        ->deleteJson("/api/admissions/{$admission->id}")
+        ->assertOk()
+        ->assertJsonPath('message', 'Admission deleted.');
+
+    expect(Admission::find($admission->id))->toBeNull();
+    expect(EnrollmentSubject::find($enrollment->id))->toBeNull();
+    expect(Grade::where('enrollment_subject_id', $enrollment->id)->exists())->toBeFalse();
+});
+
+it('blocks deleting an admission when grades are already recorded', function () {
+    $admission = makeAdmissionForStatusTest('enrolled');
+    $subject = Subject::create([
+        'code' => 'CS 202',
+        'title' => 'Algorithms',
+        'academic_level' => 'college',
+        'units' => 3,
+        'is_active' => true,
+    ]);
+    $classSection = ClassSection::create([
+        'school_term_id' => $admission->school_term_id,
+        'subject_id' => $subject->id,
+        'section' => 'B',
+        'schedule_day' => 'MWF',
+        'schedule_time' => '10:00 AM',
+        'room' => 'LAB 3',
+    ]);
+    $enrollment = EnrollmentSubject::create([
+        'admission_id' => $admission->id,
+        'class_section_id' => $classSection->id,
+    ]);
+    Grade::create([
+        'enrollment_subject_id' => $enrollment->id,
+        'prelim' => 80,
+        'final_grade' => 80,
+        'remarks' => 'PASSED',
+    ]);
+
+    $registrar = admissionRegistrar();
+
+    $this->actingAs($registrar, 'sanctum')
+        ->deleteJson("/api/admissions/{$admission->id}")
+        ->assertUnprocessable()
+        ->assertJsonPath('usage.can_delete', false)
+        ->assertJsonPath('usage.has_recorded_grades', true);
+
+    expect(Admission::find($admission->id))->not->toBeNull();
+});
+
+it('forbids teachers from deleting admissions', function () {
+    $admission = makeAdmissionForStatusTest();
+    $teacher = admissionTeacher();
+
+    $this->actingAs($teacher, 'sanctum')
+        ->deleteJson("/api/admissions/{$admission->id}")
+        ->assertForbidden();
+});

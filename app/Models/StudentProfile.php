@@ -92,4 +92,28 @@ class StudentProfile extends Model
     {
         return trim("{$this->last_name}, {$this->first_name} {$this->middle_name}");
     }
+
+    /**
+     * A student may be removed only when no admissions or grades exist.
+     *
+     * @return array{can_delete: bool, in_use: bool, admissions: int, grades: int, student_no: ?string, name: string}
+     */
+    public function deletionUsage(): array
+    {
+        $admissions = $this->admissions()->count();
+        $grades = Grade::query()
+            ->whereHas('enrollmentSubject.admission', function ($query) {
+                $query->where('student_profile_id', $this->id);
+            })
+            ->count();
+
+        return [
+            'can_delete' => $admissions === 0 && $grades === 0,
+            'in_use' => $admissions > 0 || $grades > 0,
+            'admissions' => $admissions,
+            'grades' => $grades,
+            'student_no' => $this->student_no,
+            'name' => $this->fullName(),
+        ];
+    }
 }

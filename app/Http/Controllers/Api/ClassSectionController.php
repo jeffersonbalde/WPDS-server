@@ -110,6 +110,22 @@ class ClassSectionController extends Controller
         );
     }
 
+    public function destroy(ClassSection $classSection): JsonResponse
+    {
+        $usage = $this->deleteUsagePayload($classSection);
+
+        if (! $usage['can_delete']) {
+            return response()->json([
+                'message' => 'This class section cannot be deleted because students are already enrolled. Edit the section instead.',
+                'usage' => $usage,
+            ], 422);
+        }
+
+        $classSection->delete();
+
+        return response()->json(['message' => 'Class section deleted.']);
+    }
+
     public function show(ClassSection $classSection): JsonResponse
     {
         $classSection->load([
@@ -532,5 +548,15 @@ class ClassSectionController extends Controller
                 'teacher_id' => ['The selected teacher is invalid.'],
             ]);
         }
+    }
+
+    private function deleteUsagePayload(ClassSection $classSection): array
+    {
+        $enrolledCount = $classSection->enrollmentSubjects()->count();
+
+        return [
+            'can_delete' => $enrolledCount === 0,
+            'enrolled_students' => $enrolledCount,
+        ];
     }
 }

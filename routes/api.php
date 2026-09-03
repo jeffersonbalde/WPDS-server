@@ -73,6 +73,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/students/export', [StudentProfileController::class, 'export'])
         ->middleware(EnsureUserHasRole::class.':registrar');
     Route::get('/students/{student}', [StudentProfileController::class, 'show']);
+    Route::get('/students/{student}/usage', [StudentProfileController::class, 'usage'])
+        ->middleware(EnsureUserHasRole::class.':registrar');
     Route::get('/teachers', function () {
         return User::where('role', 'teacher')
             ->where('is_active', true)
@@ -106,13 +108,16 @@ Route::middleware('auth:sanctum')->group(function () {
 
         Route::post('/students', [StudentProfileController::class, 'store']);
         Route::put('/students/{student}', [StudentProfileController::class, 'update']);
+        Route::delete('/students/{student}', [StudentProfileController::class, 'destroy']);
 
         Route::post('/admissions', [AdmissionController::class, 'store']);
         Route::patch('/admissions/{admission}/status', [AdmissionController::class, 'updateStatus']);
+        Route::delete('/admissions/{admission}', [AdmissionController::class, 'destroy']);
         Route::post('/admissions/{admission}/enroll-subjects', [AdmissionController::class, 'enrollSubjects']);
 
         Route::post('/class-sections', [ClassSectionController::class, 'store']);
         Route::put('/class-sections/{classSection}', [ClassSectionController::class, 'update']);
+        Route::delete('/class-sections/{classSection}', [ClassSectionController::class, 'destroy']);
 
         Route::post('/grade-change-requests/{gradeChangeRequest}/review', [GradeChangeRequestController::class, 'review']);
     });
