@@ -44,6 +44,7 @@ class DatabaseSeeder extends Seeder
         $users = $this->seedDemoUsers($programs);
         $this->seedClassesAndGrades($term, $programs, $subjects, $users);
         $this->call(DemoStudentsSeeder::class);
+        $this->call(DualProgramStudentSeeder::class);
         $this->seedActiveTermGrades();
         $this->seedAnnouncements();
         $this->seedNotifications();
