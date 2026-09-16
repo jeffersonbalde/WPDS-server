@@ -19,7 +19,13 @@ return [
 
     'allowed_methods' => ['*'],
 
-    'allowed_origins' => ['*'],
+    /*
+    | Local/dev default stays wide open ('*'). For production, set
+    | FRONTEND_URL to the deployed frontend's exact origin (e.g.
+    | https://portal.westprime.edu.ph) and this will restrict CORS to it
+    | automatically — no code change needed.
+    */
+    'allowed_origins' => array_values(array_filter([env('FRONTEND_URL')])) ?: ['*'],
 
     'allowed_origins_patterns' => [],
 

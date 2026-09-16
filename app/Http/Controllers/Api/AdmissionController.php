@@ -7,6 +7,7 @@ use App\Models\Admission;
 use App\Models\ClassSection;
 use App\Models\EnrollmentSubject;
 use App\Models\Grade;
+use App\Models\GradeSubmission;
 use App\Models\Program;
 use App\Models\SchoolTerm;
 use App\Models\StudentProfile;
@@ -281,10 +282,10 @@ class AdmissionController extends Controller
     public function show(Request $request, Admission $admission): JsonResponse
     {
         $user = $request->user();
-        if (in_array($user->role->value, ['student', 'alumni'], true)) {
-            if ($admission->student_profile_id !== $user->studentProfile?->id) {
-                return response()->json(['message' => 'Forbidden.'], 403);
-            }
+        $isStudent = $user->role->value === 'student';
+
+        if ($isStudent && $admission->student_profile_id !== $user->studentProfile?->id) {
+            return response()->json(['message' => 'Forbidden.'], 403);
         }
 
         $admission->load([
@@ -297,7 +298,57 @@ class AdmissionController extends Controller
             'enrollmentSubjects.grade',
         ]);
 
+        if ($isStudent) {
+            $this->maskUnreleasedGrades($admission);
+        }
+
         return response()->json($admission);
+    }
+
+    /**
+     * Students only see a period grade after the registrar releases it.
+     * Final grade and remarks appear only once all four periods are released.
+     */
+    private function maskUnreleasedGrades(Admission $admission): void
+    {
+        $sectionIds = $admission->enrollmentSubjects
+            ->pluck('class_section_id')
+            ->filter()
+            ->unique()
+            ->all();
+
+        if ($sectionIds === []) {
+            return;
+        }
+
+        $releasedBySection = GradeSubmission::query()
+            ->whereIn('class_section_id', $sectionIds)
+            ->where('status', 'released')
+            ->get(['class_section_id', 'period'])
+            ->groupBy('class_section_id')
+            ->map(fn ($rows) => $rows->pluck('period')->all());
+
+        $periods = GradeSubmission::PERIODS;
+
+        foreach ($admission->enrollmentSubjects as $enrollment) {
+            $grade = $enrollment->grade;
+            if (! $grade) {
+                continue;
+            }
+
+            $released = $releasedBySection[$enrollment->class_section_id] ?? [];
+
+            foreach ($periods as $period) {
+                if (! in_array($period, $released, true)) {
+                    $grade->{$period} = null;
+                }
+            }
+
+            if (count(array_intersect($periods, $released)) !== count($periods)) {
+                $grade->final_grade = null;
+                $grade->remarks = null;
+            }
+        }
     }
 
     public function updateStatus(Request $request, Admission $admission): JsonResponse
@@ -367,7 +418,7 @@ class AdmissionController extends Controller
         $user = $request->user();
         $query = Admission::with(['studentProfile.user', 'schoolTerm', 'program', 'programMajor']);
 
-        if (in_array($user->role->value, ['student', 'alumni'], true)) {
+        if ($user->role->value === 'student') {
             $profileId = $user->studentProfile?->id;
             $query->where('student_profile_id', $profileId);
         } elseif ($studentId = $request->query('student_profile_id')) {
@@ -389,6 +440,10 @@ class AdmissionController extends Controller
 
         if ($termId = $request->query('school_term_id')) {
             $query->where('school_term_id', $termId);
+        }
+
+        if ($programId = $request->query('program_id')) {
+            $query->where('program_id', $programId);
         }
 
         if ($search = trim((string) $request->query('search', ''))) {
@@ -414,6 +469,11 @@ class AdmissionController extends Controller
         if ($termId = $request->query('school_term_id')) {
             $term = SchoolTerm::find($termId);
             $parts[] = 'Term: '.($term?->name ?: 'Selected term');
+        }
+
+        if ($programId = $request->query('program_id')) {
+            $program = Program::find($programId);
+            $parts[] = 'Program: '.($program?->code ?: 'Selected program');
         }
 
         if ($status = $request->query('status')) {

@@ -670,7 +670,7 @@ class StudentProfileController extends Controller
             $user = $student->user;
             $student->delete();
 
-            if ($user && $user->hasRole([UserRole::Student, UserRole::Alumni])) {
+            if ($user && $user->hasRole(UserRole::Student)) {
                 $user->tokens()->delete();
                 $user->delete();
             }
@@ -687,7 +687,7 @@ class StudentProfileController extends Controller
             return response()->json(['message' => 'No student profile found.'], 404);
         }
 
-        $profile->load(['program', 'programMajor']);
+        $profile->load(['program', 'programMajor', 'user:id,name,email']);
 
         return response()->json($profile);
     }

@@ -119,6 +119,21 @@ it('lists class sections with pagination and summary', function () {
         ->assertJsonPath('data.0.subject.code', $withStudents->subject->code);
 });
 
+it('paginates class sections scoped to the requesting teacher', function () {
+    $teacher = classSectionTeacher();
+    $otherTeacher = classSectionTeacher();
+    makeClassSectionCatalog(['teacher_id' => $teacher->id, 'section' => 'A']);
+    makeClassSectionCatalog(['teacher_id' => $teacher->id, 'section' => 'B']);
+    makeClassSectionCatalog(['teacher_id' => $otherTeacher->id, 'section' => 'C']);
+
+    $response = $this->actingAs($teacher)->getJson('/api/class-sections?page=1&per_page=10');
+
+    $response->assertOk()
+        ->assertJsonPath('total', 2)
+        ->assertJsonPath('summary.total', 2)
+        ->assertJsonCount(2, 'data');
+});
+
 it('creates a class section for registrar', function () {
     $registrar = classSectionRegistrar();
     $teacher = classSectionTeacher();
@@ -187,7 +202,7 @@ it('shows enrolled students for a class section', function () {
     $registrar = classSectionRegistrar();
     $teacher = classSectionTeacher();
     $section = makeClassSectionCatalog(['teacher_id' => $teacher->id]);
-        $enrollment = attachEnrollmentToSection($section);
+    $enrollment = attachEnrollmentToSection($section);
 
     $response = $this->actingAs($registrar)->getJson("/api/class-sections/{$section->id}");
 

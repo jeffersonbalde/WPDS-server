@@ -5,186 +5,287 @@ namespace Database\Seeders;
 use App\Enums\AcademicLevel;
 use App\Enums\UserRole;
 use App\Models\Admission;
+use App\Models\Announcement;
 use App\Models\ClassSection;
-use App\Models\CurriculumItem;
 use App\Models\EnrollmentSubject;
 use App\Models\Grade;
+use App\Models\GradeSubmission;
 use App\Models\Program;
 use App\Models\SchoolTerm;
-use App\Models\StaffProfile;
 use App\Models\StudentProfile;
 use App\Models\Subject;
 use App\Models\User;
+use App\Notifications\SystemNotification;
 use App\Services\GradeCalculator;
 use Illuminate\Database\Seeder;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Str;
 
 class DatabaseSeeder extends Seeder
 {
+    /**
+     * Local development / demo seed: real master data (via ProductionSeeder)
+     * PLUS sample students, class sections, and grades for showing the UI/UX
+     * or running the test suite.
+     *
+     * Never run this against a real school deployment — use
+     * `php artisan db:seed --class=ProductionSeeder` there instead, which
+     * seeds only the master data and staff accounts, with no fake students.
+     */
     public function run(): void
     {
-        $programs = $this->seedPrograms();
-        $subjects = $this->seedSubjects();
-        $this->seedCurriculum($programs, $subjects);
-        $term = SchoolTerm::create([
-            'name' => 'FIRST SEMESTER, 2025-2026',
-            'term_type' => 'first_semester',
-            'school_year' => '2025-2026',
-            'is_active' => true,
-        ]);
+        $this->call(ProductionSeeder::class);
 
-        $users = $this->seedUsers($programs);
+        $programs = Program::all()->keyBy('code')->all();
+        $subjects = Subject::all()->keyBy('code')->all();
+        $term = SchoolTerm::where('is_active', true)->firstOrFail();
+
+        $users = $this->seedDemoUsers($programs);
         $this->seedClassesAndGrades($term, $programs, $subjects, $users);
         $this->call(DemoStudentsSeeder::class);
+        $this->seedActiveTermGrades();
+        $this->seedAnnouncements();
+        $this->seedNotifications();
     }
 
-    private function seedPrograms(): array
+    /**
+     * Sample teacher <-> registrar notifications so the bell, badges and the
+     * Notifications page have realistic content in demos.
+     */
+    private function seedNotifications(): void
     {
-        $defs = [
-            ['GAS', 'General Academic Strand', 'shs', 'academic', 2, []],
-            ['HUMSS', 'Humanities and Social Sciences', 'shs', 'academic', 2, []],
-            ['ABM', 'Accountancy, Business and Management', 'shs', 'academic', 2, []],
-            ['STEM', 'Science, Technology, Engineering and Mathematics', 'shs', 'academic', 2, []],
-            ['CSS', 'Computer Systems Servicing (NC II)', 'shs', 'tvl', 2, []],
-            ['SMAW', 'Shielded Metal Arc Welding (NC II)', 'shs', 'tvl', 2, []],
-            ['EIM', 'Electrical Installation and Maintenance (NC II)', 'shs', 'tvl', 2, []],
-            ['AS', 'Automotive Servicing (NC II)', 'shs', 'tvl', 2, []],
-            ['BSIT', 'Bachelor of Science in Information Technology', 'college', 'degree', 4, []],
-            ['BTVTED', 'Bachelor of Technical Vocational Teacher Education', 'college', 'degree', 4, [
-                ['CHS', 'Computer Hardware Servicing'],
-                ['WAFT', 'Welding and Fabrication Technology'],
-            ]],
-            ['BAELS', 'Bachelor of Arts in English Language Studies', 'college', 'degree', 4, []],
-            ['AIT', 'Associate in Information Technology', 'college', 'associate', 2, []],
+        // Decorative demo data only — keep it out of the test database so
+        // notification assertions start from a clean slate.
+        if (app()->runningUnitTests()) {
+            return;
+        }
+
+        $teacher = User::query()->where('email', 'teacher@westprime.edu')->first();
+        $registrar = User::query()->where('email', 'registrar@westprime.edu')->first();
+
+        if (! $teacher || ! $registrar) {
+            return;
+        }
+
+        $rows = [];
+        $add = function (User $user, string $type, string $title, string $body, ?string $url, int $minutesAgo, bool $read) use (&$rows) {
+            $createdAt = now()->subMinutes($minutesAgo);
+            $rows[] = [
+                'id' => (string) Str::uuid(),
+                'type' => SystemNotification::class,
+                'notifiable_type' => User::class,
+                'notifiable_id' => $user->id,
+                'data' => json_encode([
+                    'type' => $type,
+                    'title' => $title,
+                    'body' => $body,
+                    'action_url' => $url,
+                    'meta' => [],
+                ]),
+                'read_at' => $read ? $createdAt->copy()->addMinutes(3) : null,
+                'created_at' => $createdAt,
+                'updated_at' => $createdAt,
+            ];
+        };
+
+        $add($teacher, 'grade_submission.released', 'Grades released',
+            'The registrar released your Prelim grades for CS 116. Students can now see them.',
+            '/grade-submissions', 12, false);
+        $add($teacher, 'grade_submission.returned', 'Grades returned for correction',
+            'The registrar returned your Midterm grades for CS 232. Correct them and submit again. Remarks: "Row 4 average looks off — please recheck."',
+            '/classes', 95, false);
+        $add($teacher, 'grade_change.approved', 'Grade change approved',
+            'Your Final grade change for CS 116 was approved and applied.',
+            '/grade-changes', 260, true);
+        $add($teacher, 'grade_change.rejected', 'Grade change rejected',
+            'Your Prelim grade change for CS 232 was rejected. Remarks: "No supporting document attached."',
+            '/grade-changes', 1580, true);
+
+        $add($registrar, 'grade_submission.pending', 'Grades submitted for review',
+            'Teacher Account submitted Prelim grades for CS 232 (A) — FIRST SEMESTER, 2024-2025. Review and release or return them.',
+            '/grade-submissions-review', 8, false);
+        $add($registrar, 'grade_submission.pending', 'Grades submitted for review',
+            'Teacher Account submitted Semi-Final grades for CS 116 (A). Review and release or return them.',
+            '/grade-submissions-review', 47, false);
+        $add($registrar, 'grade_change.pending', 'Grade change request',
+            'Teacher Account requested a Final grade change for REYES, SAM in CS 116 (3.00 to 1.25). Approve or reject it.',
+            '/grade-approvals', 320, true);
+
+        DB::table('notifications')->insert($rows);
+    }
+
+    /**
+     * A couple of sample dashboard announcements so the student portal
+     * has something to show in demos.
+     */
+    private function seedAnnouncements(): void
+    {
+        $registrarId = User::query()->where('role', UserRole::Registrar)->value('id');
+
+        $samples = [
+            [
+                'title' => 'Grades now available online',
+                'body' => 'Grades and academic records are available online. Contact the Registrar for confirmation of official records.',
+                'is_published' => true,
+                'published_at' => now()->subDays(2),
+            ],
+            [
+                'title' => 'Grade correction requests',
+                'body' => 'For grade correction requests, please coordinate first with your subject teacher, then proceed to the Registrar for processing.',
+                'is_published' => true,
+                'published_at' => now()->subDay(),
+            ],
+            [
+                'title' => 'System maintenance schedule (draft)',
+                'body' => 'The portal may be briefly unavailable this weekend for scheduled maintenance. Final schedule to be announced.',
+                'is_published' => false,
+                'published_at' => null,
+            ],
         ];
 
-        $map = [];
-        foreach ($defs as [$code, $name, $level, $track, $years, $majors]) {
-            $program = Program::updateOrCreate(
-                ['code' => $code],
-                [
-                    'name' => $name,
-                    'academic_level' => $level,
-                    'track_type' => $track,
-                    'duration_years' => $years,
-                    'is_active' => true,
-                ]
-            );
+        foreach ($samples as $sample) {
+            Announcement::create($sample + ['created_by' => $registrarId]);
+        }
+    }
 
-            foreach ($majors as $index => [$majorCode, $majorName]) {
-                $program->majors()->updateOrCreate(
-                    ['name' => $majorName],
+    /**
+     * Sets up grade-submission state after the demo ladder is built:
+     *  - every locked (historical) grade becomes a released submission so
+     *    students keep seeing their past records;
+     *  - "FIRST SEMESTER, 2024-2025" is forced active (the model-instance update
+     *    in DemoStudentsSeeder can silently no-op);
+     *  - the active term gets one fully-released class and one class pending
+     *    registrar review, so the queue has something to show on first login.
+     */
+    private function seedActiveTermGrades(): void
+    {
+        $registrarId = User::query()->where('role', UserRole::Registrar)->value('id');
+        $teacherId = User::query()->where('role', UserRole::Teacher)->value('id');
+        $calculator = app(GradeCalculator::class);
+
+        $this->releaseLockedGrades($registrarId, $teacherId);
+
+        $activeTerm = SchoolTerm::query()
+            ->where('term_type', 'first_semester')
+            ->where('school_year', '2024-2025')
+            ->first();
+
+        if (! $activeTerm) {
+            return;
+        }
+
+        SchoolTerm::query()->update(['is_active' => false]);
+        SchoolTerm::query()->whereKey($activeTerm->id)->update(['is_active' => true]);
+
+        $sections = ClassSection::query()
+            ->where('school_term_id', $activeTerm->id)
+            ->whereHas('enrollmentSubjects')
+            ->with(['subject', 'enrollmentSubjects.grade'])
+            ->orderBy('id')
+            ->get();
+
+        foreach ($sections as $index => $section) {
+            if ($index > 1) {
+                break;
+            }
+
+            $level = $section->subject->academic_level;
+            $periods = $index === 0 ? GradeSubmission::PERIODS : ['prelim', 'midterm'];
+
+            foreach ($section->enrollmentSubjects as $offset => $enrollment) {
+                $grade = Grade::firstOrCreate(['enrollment_subject_id' => $enrollment->id]);
+
+                foreach ($periods as $periodIndex => $period) {
+                    $grade->{$period} = $this->demoPeriodValue($level, (int) $offset, $periodIndex);
+                }
+
+                $grade->encoded_by = $teacherId;
+                $grade->recalculate($calculator, $level);
+                $grade->save();
+            }
+
+            $status = $index === 0 ? 'released' : 'pending';
+
+            foreach ($periods as $period) {
+                GradeSubmission::updateOrCreate(
+                    ['class_section_id' => $section->id, 'period' => $period],
                     [
-                        'code' => $majorCode,
-                        'sort_order' => $index,
-                        'is_active' => true,
+                        'status' => $status,
+                        'submitted_by' => $teacherId,
+                        'submitted_at' => now(),
+                        'reviewed_by' => $status === 'released' ? $registrarId : null,
+                        'reviewed_at' => $status === 'released' ? now() : null,
+                        'review_remarks' => null,
                     ]
                 );
             }
-
-            $map[$code] = $program->load('majors');
-        }
-
-        return $map;
-    }
-
-    private function seedSubjects(): array
-    {
-        $college = [
-            ['ITE 111', 'INTRODUCTION TO COMPUTING', 3],
-            ['ITE 112', 'COMPUTER PROGRAMMING 1', 3],
-            ['GE 1', 'UNDERSTANDING THE SELF', 3],
-            ['CS 116', 'NEURAL NETWORKS', 3],
-            ['CS 232', 'SOFTWARE ENGINEERING 1', 3],
-            ['CSP 107', 'GAME DEVELOPMENT', 3],
-        ];
-
-        $shs = [
-            ['ENG 1', 'ORAL COMMUNICATION', 0],
-            ['MATH 1', 'GENERAL MATHEMATICS', 0],
-            ['SCI 1', 'EARTH AND LIFE SCIENCE', 0],
-            ['CSS 1', 'COMPUTER SYSTEMS SERVICING 1', 0],
-        ];
-
-        $map = [];
-        foreach ($college as [$code, $title, $units]) {
-            $map[$code] = Subject::create([
-                'code' => $code,
-                'title' => $title,
-                'units' => $units,
-                'academic_level' => AcademicLevel::College,
-            ]);
-        }
-        foreach ($shs as [$code, $title, $units]) {
-            $map[$code] = Subject::create([
-                'code' => $code,
-                'title' => $title,
-                'units' => $units,
-                'academic_level' => AcademicLevel::Shs,
-            ]);
-        }
-
-        return $map;
-    }
-
-    private function seedCurriculum(array $programs, array $subjects): void
-    {
-        $bsit = $programs['BSIT'];
-        foreach (['ITE 111', 'ITE 112', 'GE 1'] as $i => $code) {
-            CurriculumItem::create([
-                'program_id' => $bsit->id,
-                'subject_id' => $subjects[$code]->id,
-                'year_level' => 1,
-                'semester' => 1,
-            ]);
-        }
-        foreach (['CS 116', 'CS 232', 'CSP 107'] as $code) {
-            CurriculumItem::create([
-                'program_id' => $bsit->id,
-                'subject_id' => $subjects[$code]->id,
-                'year_level' => 3,
-                'semester' => 1,
-            ]);
-        }
-
-        $stem = $programs['STEM'];
-        foreach (['ENG 1', 'MATH 1', 'SCI 1'] as $code) {
-            CurriculumItem::create([
-                'program_id' => $stem->id,
-                'subject_id' => $subjects[$code]->id,
-                'year_level' => 1,
-                'semester' => 1,
-            ]);
         }
     }
 
-    private function seedUsers(array $programs): array
+    private function releaseLockedGrades(?int $registrarId, ?int $teacherId): void
     {
-        $defs = [
-            ['Teacher Demo', 'teacher@westprime.edu', UserRole::Teacher, 'TCH-001'],
-            ['Registrar Demo', 'registrar@westprime.edu', UserRole::Registrar, 'REG-001'],
-            ['Admin President', 'admin@westprime.edu', UserRole::Admin, 'ADM-001'],
-            ['IT Support', 'it@westprime.edu', UserRole::It, 'IT-001'],
-            ['Stakeholder Chairman', 'stakeholder@westprime.edu', UserRole::Stakeholder, 'STK-001'],
-        ];
+        $lockedGrades = Grade::query()
+            ->where('is_locked', true)
+            ->with('enrollmentSubject:id,class_section_id')
+            ->get(['id', 'prelim', 'midterm', 'semi_final', 'final', 'encoded_by', 'submitted_at', 'enrollment_subject_id']);
 
-        $users = [];
-        foreach ($defs as [$name, $email, $role, $emp]) {
-            $user = User::create([
-                'name' => $name,
-                'email' => $email,
-                'password' => Hash::make('password'),
-                'role' => $role,
-                'is_active' => true,
-            ]);
-            StaffProfile::create([
-                'user_id' => $user->id,
-                'employee_no' => $emp,
-                'department' => 'West Prime Horizon Institute',
-                'position' => $role->label(),
-            ]);
-            $users[$role->value] = $user;
+        $bySection = [];
+        foreach ($lockedGrades as $grade) {
+            $sectionId = $grade->enrollmentSubject?->class_section_id;
+            if (! $sectionId) {
+                continue;
+            }
+
+            foreach (GradeSubmission::PERIODS as $period) {
+                if ($grade->{$period} === null) {
+                    continue;
+                }
+
+                $bySection[$sectionId][$period] ??= [
+                    'submitted_by' => $grade->encoded_by ?? $teacherId,
+                    'submitted_at' => $grade->submitted_at,
+                ];
+            }
         }
+
+        foreach ($bySection as $sectionId => $periods) {
+            foreach ($periods as $period => $meta) {
+                GradeSubmission::updateOrCreate(
+                    ['class_section_id' => $sectionId, 'period' => $period],
+                    [
+                        'status' => 'released',
+                        'submitted_by' => $meta['submitted_by'],
+                        'submitted_at' => $meta['submitted_at'] ?? now(),
+                        'reviewed_by' => $registrarId,
+                        'reviewed_at' => $meta['submitted_at'] ?? now(),
+                        'review_remarks' => null,
+                    ]
+                );
+            }
+        }
+    }
+
+    private function demoPeriodValue(AcademicLevel $level, int $offset, int $periodIndex): float
+    {
+        if ($level === AcademicLevel::Shs) {
+            return (float) (86 + (($offset + $periodIndex) % 10));
+        }
+
+        $scale = [1.00, 1.25, 1.50, 1.75, 2.00, 2.25];
+
+        return $scale[($offset + $periodIndex) % count($scale)];
+    }
+
+    /**
+     * Sample students only (staff accounts already exist via ProductionSeeder).
+     *
+     * @param  array<string, Program>  $programs
+     * @return array<string, User>
+     */
+    private function seedDemoUsers(array $programs): array
+    {
+        $users = ['teacher' => User::where('email', 'teacher@westprime.edu')->firstOrFail()];
 
         $collegeStudent = User::create([
             'name' => 'BALDE, JEFFERSON S',
@@ -234,11 +335,12 @@ class DatabaseSeeder extends Seeder
         ]);
         $users['shs_student'] = $shsStudent;
 
+        // Graduated student — keeps the Student role and read access to records.
         $alumni = User::create([
             'name' => 'CRUZ, JUAN D',
             'email' => 'juan.cruz@westprime.edu',
             'password' => Hash::make('password'),
-            'role' => UserRole::Alumni,
+            'role' => UserRole::Student,
             'is_active' => true,
         ]);
         StudentProfile::create([
@@ -348,7 +450,7 @@ class DatabaseSeeder extends Seeder
         $shsGrade->recalculate($calculator, AcademicLevel::Shs);
         $shsGrade->save();
 
-        // Alumni historical admission
+        // Graduated student's historical admission (full 1st–4th year record).
         $alumniAdmission = Admission::create([
             'admission_number' => '20201234',
             'student_profile_id' => $users['alumni']->studentProfile->id,

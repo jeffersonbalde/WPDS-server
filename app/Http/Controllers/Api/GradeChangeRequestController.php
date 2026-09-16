@@ -6,7 +6,9 @@ use App\Http\Controllers\Controller;
 use App\Models\AuditLog;
 use App\Models\Grade;
 use App\Models\GradeChangeRequest;
+use App\Models\GradeSubmission;
 use App\Services\GradeCalculator;
+use App\Support\StaffNotifier;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -19,6 +21,11 @@ class GradeChangeRequestController extends Controller
     public function index(Request $request): JsonResponse
     {
         $user = $request->user();
+
+        if (! in_array($user->role->value, ['teacher', 'registrar', 'admin', 'stakeholder'], true)) {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+
         $query = GradeChangeRequest::with([
             'grade.enrollmentSubject.admission.studentProfile',
             'grade.enrollmentSubject.classSection.subject',
@@ -28,7 +35,7 @@ class GradeChangeRequestController extends Controller
 
         if ($user->role->value === 'teacher') {
             $query->where('requested_by', $user->id);
-        } elseif ($user->role->value === 'registrar') {
+        } elseif (in_array($user->role->value, ['registrar', 'admin', 'stakeholder'], true)) {
             if ($status = $request->query('status', 'pending')) {
                 if ($status !== 'all') {
                     $query->where('status', $status);
@@ -36,7 +43,13 @@ class GradeChangeRequestController extends Controller
             }
         }
 
-        return response()->json($query->orderByDesc('id')->paginate(20));
+        if ($termId = $request->query('school_term_id')) {
+            $query->whereHas('grade.enrollmentSubject.classSection', fn ($q) => $q->where('school_term_id', $termId));
+        }
+
+        $perPage = min(100, max(10, (int) $request->query('per_page', 20)));
+
+        return response()->json($query->orderByDesc('id')->paginate($perPage)->appends($request->query()));
     }
 
     public function store(Request $request): JsonResponse
@@ -50,14 +63,41 @@ class GradeChangeRequestController extends Controller
         $data = $request->validate([
             'grade_id' => ['required', 'exists:grades,id'],
             'period_field' => ['required', Rule::in(['prelim', 'midterm', 'semi_final', 'final'])],
-            'new_value' => ['required', 'numeric'],
+            'new_value' => ['required', 'numeric', 'regex:/^\d+(\.\d{1,2})?$/'],
             'reason' => ['required', 'string', 'min:5'],
+        ], [
+            'new_value.numeric' => 'New value must be a number.',
+            'new_value.regex' => 'New value must be a valid grade number.',
         ]);
 
         $grade = Grade::with('enrollmentSubject.classSection.subject')->findOrFail($data['grade_id']);
 
         if ($grade->enrollmentSubject->classSection->teacher_id !== $user->id) {
             return response()->json(['message' => 'Not your class.'], 403);
+        }
+
+        $isReleased = GradeSubmission::query()
+            ->where('class_section_id', $grade->enrollmentSubject->class_section_id)
+            ->where('period', $data['period_field'])
+            ->where('status', 'released')
+            ->exists();
+
+        if (! $isReleased) {
+            return response()->json([
+                'message' => 'You can only request a change for a grade that has already been released. Edit it directly in the grade sheet instead.',
+            ], 422);
+        }
+
+        $hasPending = GradeChangeRequest::query()
+            ->where('grade_id', $grade->id)
+            ->where('period_field', $data['period_field'])
+            ->where('status', 'pending')
+            ->exists();
+
+        if ($hasPending) {
+            return response()->json([
+                'message' => 'There is already a pending change request for this grade period.',
+            ], 422);
         }
 
         $level = $grade->enrollmentSubject->classSection->subject->academic_level;
@@ -74,6 +114,8 @@ class GradeChangeRequestController extends Controller
             'status' => 'pending',
             'requested_by' => $user->id,
         ]);
+
+        StaffNotifier::gradeChangeRequested($change);
 
         return response()->json($change->load(['grade', 'requester']), 201);
     }
@@ -131,6 +173,8 @@ class GradeChangeRequestController extends Controller
 
             return $gradeChangeRequest->fresh()->load(['grade', 'requester', 'reviewer']);
         });
+
+        StaffNotifier::gradeChangeReviewed($result);
 
         return response()->json($result);
     }

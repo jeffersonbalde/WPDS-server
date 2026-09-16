@@ -4,7 +4,10 @@ namespace App\Http\Controllers\Api;
 
 use App\Enums\UserRole;
 use App\Http\Controllers\Controller;
+use App\Models\Admission;
 use App\Models\ClassSection;
+use App\Models\SchoolTerm;
+use App\Models\Subject;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
@@ -135,6 +138,7 @@ class ClassSectionController extends Controller
             'enrollmentSubjects.admission.studentProfile.user',
             'enrollmentSubjects.admission.program',
             'enrollmentSubjects.grade',
+            'gradeSubmissions.reviewer',
         ])->loadCount('enrollmentSubjects');
 
         $sorted = $classSection->enrollmentSubjects
@@ -373,13 +377,13 @@ class ClassSectionController extends Controller
         $parts = ['Filters: All sections'];
 
         if ($termId = $request->query('school_term_id')) {
-            $term = \App\Models\SchoolTerm::find($termId);
+            $term = SchoolTerm::find($termId);
             $parts[] = 'Term: '.($term?->name ?: 'Selected term');
         }
 
         if ($request->query('enrollment_status') === 'with_students') {
             $parts[] = 'Enrollment: With enrollment';
-        } else        if ($request->query('enrollment_status') === 'empty') {
+        } elseif ($request->query('enrollment_status') === 'empty') {
             $parts[] = 'Enrollment: No enrollment yet';
         }
 
@@ -399,7 +403,7 @@ class ClassSectionController extends Controller
         return implode(' · ', $parts);
     }
 
-    private function subjectLevelLabel(?\App\Models\Subject $subject): string
+    private function subjectLevelLabel(?Subject $subject): string
     {
         if (! $subject) {
             return '—';
@@ -415,7 +419,7 @@ class ClassSectionController extends Controller
         };
     }
 
-    private function formatAdmissionYearLevel(?\App\Models\Admission $admission): string
+    private function formatAdmissionYearLevel(?Admission $admission): string
     {
         if (! $admission || $admission->year_level === null) {
             return '—';

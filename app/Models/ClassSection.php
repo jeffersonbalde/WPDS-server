@@ -37,4 +37,9 @@ class ClassSection extends Model
     {
         return $this->hasMany(EnrollmentSubject::class);
     }
+
+    public function gradeSubmissions(): HasMany
+    {
+        return $this->hasMany(GradeSubmission::class);
+    }
 }

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\CurriculumItem;
 use App\Models\EnrollmentSubject;
+use App\Models\GradeSubmission;
 use App\Models\Program;
 use App\Models\Subject;
 use Illuminate\Http\JsonResponse;
@@ -492,6 +493,7 @@ class CurriculumController extends Controller
                 $this->styleExportTableRow($sheet, "A{$row}:{$lastCol}{$row}", $rowNum % 2 === 0);
                 $row++;
                 $rowNum++;
+
                 continue;
             }
 
@@ -614,23 +616,127 @@ class CurriculumController extends Controller
         $user = $request->user();
         $profile = $user->studentProfile;
 
-        if (! $profile?->program_id) {
-            return response()->json([]);
+        $empty = [
+            'programs' => [],
+            'selected_program_id' => null,
+            'program' => null,
+            'program_major' => null,
+            'items' => [],
+            'summary' => ['total' => 0, 'units' => 0],
+        ];
+
+        if (! $profile) {
+            return response()->json($empty);
         }
 
+        // Every program the student has been admitted under (covers shiftees),
+        // plus the program currently on their profile.
+        $programIds = $profile->admissions()
+            ->pluck('program_id')
+            ->push($profile->program_id)
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($programIds->isEmpty()) {
+            return response()->json($empty);
+        }
+
+        $programs = Program::query()
+            ->whereIn('id', $programIds)
+            ->orderBy('code')
+            ->get(['id', 'code', 'name', 'academic_level']);
+
+        $requested = (int) $request->query('program_id');
+        $selectedId = $programIds->contains($requested)
+            ? $requested
+            : (int) ($profile->program_id ?: $programs->first()->id);
+
+        if (! $programIds->contains($selectedId)) {
+            $selectedId = (int) $programs->first()->id;
+        }
+
+        $program = Program::with([
+            'majors' => fn ($q) => $q->orderBy('sort_order')->orderBy('name'),
+        ])->find($selectedId);
+
         $items = CurriculumItem::with('subject')
-            ->where('program_id', $profile->program_id)
+            ->where('program_id', $selectedId)
             ->orderBy('year_level')
             ->orderBy('semester')
+            ->orderBy('id')
             ->get();
 
-        $program = Program::with('majors')->find($profile->program_id);
+        // The student's real enrollment history across ALL programs, keyed by
+        // subject so a shiftee's credited subjects line up with this curriculum.
+        $enrollments = EnrollmentSubject::query()
+            ->whereHas('admission', fn ($q) => $q->where('student_profile_id', $profile->id))
+            ->with([
+                'admission:id,school_term_id,program_id,year_level',
+                'admission.schoolTerm:id,name',
+                'admission.program:id,code',
+                'classSection:id,subject_id',
+                'grade:id,enrollment_subject_id,final_grade,remarks',
+            ])
+            ->orderByDesc('id')
+            ->get();
+
+        // A class section's final grade is visible to the student only once every
+        // grading period has been released — same rule as the admissions view.
+        $sectionIds = $enrollments->pluck('class_section_id')->filter()->unique()->all();
+        $releasedBySection = GradeSubmission::query()
+            ->whereIn('class_section_id', $sectionIds)
+            ->where('status', 'released')
+            ->get(['class_section_id', 'period'])
+            ->groupBy('class_section_id')
+            ->map(fn ($rows) => $rows->pluck('period')->unique()->all());
+        $periods = GradeSubmission::PERIODS;
+
+        $takenBySubject = [];
+        foreach ($enrollments as $enrollment) {
+            $subjectId = $enrollment->classSection?->subject_id;
+            if (! $subjectId || isset($takenBySubject[$subjectId])) {
+                continue; // newest attempt wins (ordered by id desc)
+            }
+
+            $released = $releasedBySection[$enrollment->class_section_id] ?? [];
+            $fullyReleased = count(array_intersect($periods, $released)) === count($periods);
+
+            $takenBySubject[$subjectId] = [
+                'term_name' => $enrollment->admission?->schoolTerm?->name,
+                'program_code' => $enrollment->admission?->program?->code,
+                'year_level' => $enrollment->admission?->year_level,
+                'final_grade' => $fullyReleased ? $enrollment->grade?->final_grade : null,
+                'remarks' => $fullyReleased ? $enrollment->grade?->remarks : null,
+            ];
+        }
+
+        $itemsOut = $items->map(function (CurriculumItem $item) use ($takenBySubject) {
+            $row = $item->toArray();
+            $row['taken'] = $takenBySubject[$item->subject_id] ?? null;
+
+            return $row;
+        })->values();
+
         $profile->load('programMajor');
 
         return response()->json([
+            'programs' => $programs->map(fn (Program $p) => [
+                'id' => $p->id,
+                'code' => $p->code,
+                'name' => $p->name,
+                'is_current' => (int) $p->id === (int) $profile->program_id,
+            ])->values(),
+            'selected_program_id' => $selectedId,
             'program' => $program,
-            'program_major' => $profile->programMajor,
-            'items' => $items,
+            'program_major' => $selectedId === (int) $profile->program_id
+                ? $profile->programMajor
+                : null,
+            'items' => $itemsOut,
+            'summary' => [
+                'total' => $items->count(),
+                'units' => round((float) $items->sum(fn ($i) => (float) ($i->subject?->units ?? 0)), 2),
+            ],
         ]);
     }
 }

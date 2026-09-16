@@ -8,7 +8,6 @@ enum UserRole: string
     case Registrar = 'registrar';
     case Admin = 'admin';
     case Student = 'student';
-    case Alumni = 'alumni';
     case It = 'it';
     case Stakeholder = 'stakeholder';
 
@@ -19,7 +18,6 @@ enum UserRole: string
             self::Registrar => 'Registrar',
             self::Admin => 'Admin',
             self::Student => 'Student',
-            self::Alumni => 'Alumni',
             self::It => 'IT',
             self::Stakeholder => 'Stakeholder',
         };

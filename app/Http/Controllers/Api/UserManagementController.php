@@ -5,11 +5,13 @@ namespace App\Http\Controllers\Api;
 use App\Enums\UserRole;
 use App\Http\Controllers\Controller;
 use App\Models\AuditLog;
+use App\Models\ClassSection;
 use App\Models\StaffProfile;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 
 class UserManagementController extends Controller
@@ -18,8 +20,12 @@ class UserManagementController extends Controller
     {
         $query = User::query()->with(['studentProfile', 'staffProfile']);
 
-        if ($role = $request->query('role')) {
-            $query->where('role', $role);
+        $role = $request->query('role');
+        if (is_string($role) && $role !== '' && $role !== 'all') {
+            $allowed = array_column(UserRole::cases(), 'value');
+            if (in_array($role, $allowed, true)) {
+                $query->where('role', $role);
+            }
         }
 
         if ($request->filled('is_active')) {
@@ -27,26 +33,65 @@ class UserManagementController extends Controller
             if ($active !== null) {
                 $query->where('is_active', $active);
             }
+        } elseif ($request->filled('status')) {
+            $status = strtolower((string) $request->query('status'));
+            if ($status === 'active') {
+                $query->where('is_active', true);
+            } elseif ($status === 'inactive') {
+                $query->where('is_active', false);
+            }
         }
 
-        if ($search = $request->query('search')) {
+        if ($search = trim((string) $request->query('search', ''))) {
             $query->where(function ($q) use ($search) {
                 $q->where('name', 'like', "%{$search}%")
                     ->orWhere('email', 'like', "%{$search}%");
             });
         }
 
-        $perPage = min(100, max(10, (int) $request->query('per_page', 50)));
+        $perPage = min(100, max(10, (int) $request->query('per_page', 10)));
 
-        return response()->json($query->orderBy('name')->paginate($perPage));
+        $paginator = $query->orderBy('name')->paginate($perPage)->appends($request->query());
+        $payload = $paginator->toArray();
+        $payload['summary'] = [
+            'total' => User::query()->count(),
+            'active' => User::query()->where('is_active', true)->count(),
+            'inactive' => User::query()->where('is_active', false)->count(),
+            'students' => User::query()->where('role', UserRole::Student)->count(),
+        ];
+
+        return response()->json($payload);
+    }
+
+    public function show(User $user): JsonResponse
+    {
+        $user->load(['studentProfile', 'staffProfile']);
+
+        $payload = $user->toArray();
+
+        if ($user->role === UserRole::Teacher) {
+            $payload['class_sections'] = ClassSection::query()
+                ->where('teacher_id', $user->id)
+                ->with([
+                    'subject:id,code,title,units,academic_level',
+                    'schoolTerm:id,name,school_year,term_type',
+                ])
+                ->withCount('enrollmentSubjects')
+                ->orderByDesc('id')
+                ->get();
+        } else {
+            $payload['class_sections'] = [];
+        }
+
+        return response()->json($payload);
     }
 
     public function store(Request $request): JsonResponse
     {
         $roleValue = $request->input('role');
-        if (in_array($roleValue, [UserRole::Student->value, UserRole::Alumni->value], true)) {
+        if ($roleValue === UserRole::Student->value) {
             return response()->json([
-                'message' => 'Student and alumni accounts are created by the Registrar.',
+                'message' => 'Student accounts are created by the Registrar.',
             ], 422);
         }
 
@@ -63,6 +108,7 @@ class UserManagementController extends Controller
                         if (! filter_var($value, FILTER_VALIDATE_EMAIL)) {
                             $fail('Enter a valid email address or username.');
                         }
+
                         return;
                     }
                     if (! preg_match('/^[a-zA-Z0-9._-]{3,60}$/', $value)) {
@@ -78,17 +124,26 @@ class UserManagementController extends Controller
                 UserRole::It->value,
                 UserRole::Stakeholder->value,
             ])],
-            'employee_no' => ['required', 'string', 'max:50'],
+            'employee_no' => [
+                'nullable', 'string', 'max:50',
+                Rule::unique('staff_profiles', 'employee_no'),
+            ],
             'department' => ['nullable', 'string', 'max:255'],
             'position' => ['nullable', 'string', 'max:255'],
             'mobile' => ['nullable', 'string', 'max:30'],
+            'avatar' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
         ]);
 
-        $user = DB::transaction(function () use ($data, $request) {
+        $avatarPath = $request->hasFile('avatar')
+            ? $request->file('avatar')->store('avatars', 'public')
+            : null;
+
+        $user = DB::transaction(function () use ($data, $request, $avatarPath) {
             $user = User::create([
                 'name' => $data['name'],
                 'email' => $data['email'],
                 'password' => $data['password'],
+                'avatar_path' => $avatarPath,
                 'role' => $data['role'],
                 'is_active' => true,
             ]);
@@ -167,5 +222,51 @@ class UserManagementController extends Controller
         ]);
 
         return response()->json(['message' => 'Password reset successfully.']);
+    }
+
+    public function updateAvatar(Request $request, User $user): JsonResponse
+    {
+        $data = $request->validate([
+            'avatar' => ['required', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
+        ]);
+
+        $oldPath = $user->getRawOriginal('avatar_path');
+        $newPath = $data['avatar']->store('avatars', 'public');
+
+        $user->update(['avatar_path' => $newPath]);
+
+        if ($oldPath) {
+            Storage::disk('public')->delete($oldPath);
+        }
+
+        AuditLog::create([
+            'user_id' => $request->user()->id,
+            'action' => 'user.avatar_updated',
+            'auditable_type' => User::class,
+            'auditable_id' => $user->id,
+            'ip_address' => $request->ip(),
+        ]);
+
+        return response()->json($user->fresh()->load(['studentProfile', 'staffProfile']));
+    }
+
+    public function destroyAvatar(Request $request, User $user): JsonResponse
+    {
+        $oldPath = $user->getRawOriginal('avatar_path');
+
+        if ($oldPath) {
+            Storage::disk('public')->delete($oldPath);
+            $user->update(['avatar_path' => null]);
+
+            AuditLog::create([
+                'user_id' => $request->user()->id,
+                'action' => 'user.avatar_removed',
+                'auditable_type' => User::class,
+                'auditable_id' => $user->id,
+                'ip_address' => $request->ip(),
+            ]);
+        }
+
+        return response()->json($user->fresh()->load(['studentProfile', 'staffProfile']));
     }
 }

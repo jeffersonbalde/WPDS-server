@@ -61,6 +61,9 @@ class AuthController extends Controller
             'role' => $user->role->value,
             'role_label' => $user->role->label(),
             'is_active' => $user->is_active,
+            'avatar_url' => $user->avatar_url,
+            'created_at' => $user->created_at,
+            'updated_at' => $user->updated_at,
             'student_profile' => $user->studentProfile,
             'staff_profile' => $user->staffProfile,
         ];

@@ -268,3 +268,69 @@ it('forbids teachers from deleting admissions', function () {
         ->deleteJson("/api/admissions/{$admission->id}")
         ->assertForbidden();
 });
+
+it('filters the admissions list by program', function () {
+    $term = SchoolTerm::create([
+        'name' => 'FIRST SEMESTER, 2025-2026',
+        'term_type' => 'first_semester',
+        'school_year' => '2025-2026',
+        'is_active' => true,
+    ]);
+
+    $makeAdmissionForProgram = function (string $code) use ($term) {
+        $program = Program::create([
+            'code' => $code,
+            'name' => $code,
+            'academic_level' => 'college',
+            'track_type' => 'degree',
+            'duration_years' => 4,
+            'is_active' => true,
+        ]);
+        $user = User::factory()->create(['role' => UserRole::Student]);
+        $student = StudentProfile::create([
+            'user_id' => $user->id,
+            'student_no' => '2026-'.substr(uniqid(), -4),
+            'program_id' => $program->id,
+            'academic_level' => 'college',
+            'last_name' => 'Doe',
+            'first_name' => $code,
+        ]);
+
+        return Admission::create([
+            'admission_number' => 'ADM-'.uniqid(),
+            'student_profile_id' => $student->id,
+            'school_term_id' => $term->id,
+            'program_id' => $program->id,
+            'year_level' => 1,
+            'section' => 'A',
+            'status' => 'enrolled',
+        ]);
+    };
+
+    $bsit = $makeAdmissionForProgram('BSIT');
+    $bshm = $makeAdmissionForProgram('BSHM');
+
+    $registrar = admissionRegistrar();
+
+    $this->actingAs($registrar, 'sanctum')
+        ->getJson("/api/admissions?program_id={$bsit->program_id}")
+        ->assertOk()
+        ->assertJsonPath('total', 1)
+        ->assertJsonPath('data.0.id', $bsit->id);
+
+    $this->actingAs($registrar, 'sanctum')
+        ->getJson("/api/admissions?program_id={$bshm->program_id}")
+        ->assertOk()
+        ->assertJsonPath('total', 1)
+        ->assertJsonPath('data.0.id', $bshm->id);
+});
+
+it('exports admissions filtered by program', function () {
+    $admission = makeAdmissionForStatusTest('enrolled');
+    $registrar = admissionRegistrar();
+
+    $this->actingAs($registrar, 'sanctum')
+        ->get("/api/admissions/export?program_id={$admission->program_id}")
+        ->assertOk()
+        ->assertHeader('content-type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+});
