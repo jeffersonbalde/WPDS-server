@@ -4,26 +4,29 @@ namespace Database\Seeders;
 
 use App\Models\User;
 use Illuminate\Database\Seeder;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 
 /**
- * Downloads realistic portrait photos for every portal user so User Management
- * and directories show real faces (demo / local preview only).
+ * Assigns realistic portrait photos to portal users so User Management
+ * and directories show real faces in demos / staging.
  *
- * Safe to re-run: replaces previous demo avatars and keeps uploaded ones only
- * when --keep-existing is used via the artisan wrapper, or when a user already
- * has a non-demo path and force is false.
+ * Prefers bundled images under database/seeders/data/portraits/ (no network
+ * needed — works on locked-down deploys). Falls back to randomuser.me only
+ * when a bundled file is missing.
  *
- * Source: randomuser.me portrait CDN (stock headshots).
+ * Safe to re-run: overwrites previous demo-user-*.jpg avatars.
  *
- * Run: php artisan db:seed --class=UserAvatarDemoSeeder --force
+ * Run:
+ *   php artisan db:seed --class=UserAvatarDemoSeeder --force
+ *   php artisan wpds:seed-demo-avatars
  */
 class UserAvatarDemoSeeder extends Seeder
 {
-    private const MEN_MAX = 99;
+    private const MEN_COUNT = 40;
 
-    private const WOMEN_MAX = 99;
+    private const WOMEN_COUNT = 40;
 
     public function run(): void
     {
@@ -42,6 +45,12 @@ class UserAvatarDemoSeeder extends Seeder
             return;
         }
 
+        $pack = $this->portraitPackPath();
+        $hasPack = is_dir($pack.'/men') && is_dir($pack.'/women');
+        if (! $hasPack) {
+            $this->command?->warn('Bundled portrait pack missing — will try network download.');
+        }
+
         $ok = 0;
         $fail = 0;
         $manIndex = 0;
@@ -54,51 +63,76 @@ class UserAvatarDemoSeeder extends Seeder
         foreach ($users as $user) {
             $female = $this->looksFemale($user);
             if ($female) {
-                $slot = $womanIndex % (self::WOMEN_MAX + 1);
+                $slot = $womanIndex % self::WOMEN_COUNT;
                 $womanIndex++;
-                $url = "https://randomuser.me/api/portraits/women/{$slot}.jpg";
+                $genderDir = 'women';
             } else {
-                $slot = $manIndex % (self::MEN_MAX + 1);
+                $slot = $manIndex % self::MEN_COUNT;
                 $manIndex++;
-                $url = "https://randomuser.me/api/portraits/men/{$slot}.jpg";
+                $genderDir = 'men';
             }
 
-            try {
-                $response = Http::timeout(20)
-                    ->withHeaders(['User-Agent' => 'WPDS-AvatarSeeder/1.0'])
-                    ->get($url);
+            $bytes = $this->loadPortraitBytes($pack, $genderDir, $slot);
+            if ($bytes === null || strlen($bytes) < 500) {
+                $fail++;
+                $bar?->advance();
 
-                if (! $response->successful() || strlen($response->body()) < 500) {
-                    $fail++;
-                    $bar?->advance();
+                continue;
+            }
 
-                    continue;
-                }
+            $filename = 'avatars/demo-user-'.$user->id.'.jpg';
+            Storage::disk('public')->put($filename, $bytes);
 
-                $filename = 'avatars/demo-user-'.$user->id.'.jpg';
-                Storage::disk('public')->put($filename, $response->body());
-
-                $old = $user->getRawOriginal('avatar_path');
-                if ($old && $old !== $filename && Storage::disk('public')->exists($old)) {
+            $old = $user->getRawOriginal('avatar_path');
+            if ($old && $old !== $filename && Storage::disk('public')->exists($old)) {
+                // Only delete previous demo avatars, not manually uploaded photos
+                // that happen to share the same user id pattern after a reset.
+                if (str_starts_with((string) $old, 'avatars/demo-user-')) {
                     Storage::disk('public')->delete($old);
                 }
-
-                $user->forceFill(['avatar_path' => $filename])->save();
-                $ok++;
-            } catch (\Throwable $e) {
-                $fail++;
-                $this->command?->newLine();
-                $this->command?->warn("Failed for {$user->email}: {$e->getMessage()}");
             }
 
+            $user->forceFill(['avatar_path' => $filename])->save();
+            $ok++;
             $bar?->advance();
         }
 
         $bar?->finish();
         $this->command?->newLine(2);
         $this->command?->info("Done: {$ok} avatars saved".($fail ? ", {$fail} failed" : '').'.');
-        $this->command?->line('Open User Management — every card should show a real portrait.');
-        $this->command?->line('Ensure `php artisan storage:link` has been run (already linked on most installs).');
+        $this->command?->line('Open User Management — cards should show real portraits.');
+        $this->command?->line('Ensure `php artisan storage:link` has been run on this host.');
+    }
+
+    private function portraitPackPath(): string
+    {
+        return database_path('seeders/data/portraits');
+    }
+
+    private function loadPortraitBytes(string $pack, string $genderDir, int $slot): ?string
+    {
+        $local = $pack.DIRECTORY_SEPARATOR.$genderDir.DIRECTORY_SEPARATOR.$slot.'.jpg';
+        if (is_file($local)) {
+            $bytes = File::get($local);
+
+            return is_string($bytes) && $bytes !== '' ? $bytes : null;
+        }
+
+        $url = "https://randomuser.me/api/portraits/{$genderDir}/{$slot}.jpg";
+
+        try {
+            $response = Http::timeout(20)
+                ->withHeaders(['User-Agent' => 'WPDS-AvatarSeeder/1.0'])
+                ->get($url);
+
+            if (! $response->successful() || strlen($response->body()) < 500) {
+                return null;
+            }
+
+            return $response->body();
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     private function looksFemale(User $user): bool
@@ -112,12 +146,10 @@ class UserAvatarDemoSeeder extends Seeder
         }
 
         $name = strtoupper($user->name ?? '');
-        // Demo names often "LAST, FIRST M"
-        if (preg_match('/,\s*(MARIA|ANA|ANNA|KAREN|JANE|MARY|ROSE|ANGELA|SOFIA|SOFIA|CRISTINA|LIZA|LIZA)\b/', $name)) {
+        if (preg_match('/,\s*(MARIA|ANA|ANNA|KAREN|JANE|MARY|ROSE|ANGELA|SOFIA|CRISTINA|LIZA)\b/', $name)) {
             return true;
         }
 
-        // Stable alternate for staff / unknown
         return ((int) $user->id % 2) === 0;
     }
 }

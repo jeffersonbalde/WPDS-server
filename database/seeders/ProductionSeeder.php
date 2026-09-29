@@ -36,9 +36,12 @@ class ProductionSeeder extends Seeder
         $this->seedCurriculum($programs, $subjects);
         $this->seedInitialTerm();
         $this->seedStaffAccounts();
+        $this->call(UserAvatarDemoSeeder::class);
 
         $this->command?->info('Production seed complete: programs, subjects, curriculum, one active term, and 5 staff accounts.');
+        $this->command?->info('Staff accounts include demo portrait photos for User Management.');
         $this->command?->warn('All staff accounts use the password "password" — change every one of them now.');
+        $this->command?->line('To (re)apply portraits later: php artisan wpds:seed-demo-avatars --force');
     }
 
     /**
