@@ -108,12 +108,23 @@ class GradeController extends Controller
                 $grade->recalculate($this->calculator, $level);
                 $grade->save();
 
+                $enrollment->loadMissing(['admission.studentProfile']);
+                $profile = $enrollment->admission?->studentProfile;
+                $studentName = $profile
+                    ? trim($profile->last_name.', '.$profile->first_name, ' ,')
+                    : null;
+
                 AuditLog::create([
                     'user_id' => $user->id,
                     'action' => 'grade.updated',
                     'auditable_type' => Grade::class,
                     'auditable_id' => $grade->id,
-                    'new_values' => $grade->only(['prelim', 'midterm', 'semi_final', 'final', 'final_grade', 'remarks']),
+                    'new_values' => array_filter([
+                        ...$grade->only(['prelim', 'midterm', 'semi_final', 'final', 'final_grade', 'remarks']),
+                        'student_name' => $studentName,
+                        'student_no' => $profile?->student_no,
+                        'subject_code' => $classSection->subject?->code,
+                    ], static fn ($v) => $v !== null && $v !== ''),
                     'ip_address' => $request->ip(),
                 ]);
 
@@ -206,7 +217,12 @@ class GradeController extends Controller
                 'action' => 'grade_submission.submitted',
                 'auditable_type' => GradeSubmission::class,
                 'auditable_id' => $submission->id,
-                'new_values' => ['period' => $period, 'class_section_id' => $classSection->id],
+                'new_values' => [
+                    'period' => $period,
+                    'class_section_id' => $classSection->id,
+                    'subject_code' => $classSection->subject?->code,
+                    'subject' => $classSection->subject?->title,
+                ],
                 'ip_address' => $request->ip(),
             ]);
 

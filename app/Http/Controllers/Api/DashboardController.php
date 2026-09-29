@@ -13,6 +13,8 @@ use App\Models\SchoolTerm;
 use App\Models\StudentProfile;
 use App\Models\Subject;
 use App\Models\User;
+use App\Support\DateRangeFilter;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -21,41 +23,103 @@ class DashboardController extends Controller
 {
     public function summary(Request $request): JsonResponse
     {
+        $range = DateRangeFilter::fromRequest($request);
         $role = $request->user()->role->value;
 
         if ($role === 'registrar') {
-            return response()->json($this->registrarSummary());
+            return response()->json($this->withFilter($this->registrarSummary($range), $range));
         }
 
         if (in_array($role, ['admin', 'stakeholder', 'it'], true)) {
-            return response()->json($this->adminSummary());
+            return response()->json($this->withFilter($this->adminSummary($range), $range));
         }
 
         if ($role === 'teacher') {
-            return response()->json($this->teacherSummary($request->user()->id));
+            return response()->json($this->withFilter($this->teacherSummary($request->user()->id, $range), $range));
         }
 
         if ($role === 'student') {
-            return response()->json($this->studentSummary($request->user()));
+            return response()->json($this->withFilter($this->studentSummary($request->user(), $range), $range));
         }
 
-        return response()->json([]);
+        return response()->json($this->withFilter([], $range));
     }
 
-    private function registrarSummary(): array
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    private function withFilter(array $payload, DateRangeFilter $range): array
     {
-        $students = StudentProfile::query();
+        $payload['filter'] = $range->toArray();
+
+        return $payload;
+    }
+
+    /**
+     * @template TModel of \Illuminate\Database\Eloquent\Model
+     *
+     * @param  Builder<TModel>  $query
+     * @return Builder<TModel>
+     */
+    private function scoped(Builder $query, DateRangeFilter $range, string $column = 'created_at'): Builder
+    {
+        return $range->apply($query, $column);
+    }
+
+    /**
+     * Prefer a timestamp column when present, otherwise fall back (e.g. submitted_at / created_at).
+     *
+     * @template TModel of \Illuminate\Database\Eloquent\Model
+     *
+     * @param  Builder<TModel>  $query
+     * @return Builder<TModel>
+     */
+    private function scopedCoalesce(Builder $query, DateRangeFilter $range, string $preferred, string $fallback = 'created_at'): Builder
+    {
+        if (! $range->isActive()) {
+            return $query;
+        }
+
+        $allowed = ['created_at', 'submitted_at', 'updated_at', 'reviewed_at'];
+        if (! in_array($preferred, $allowed, true) || ! in_array($fallback, $allowed, true)) {
+            return $this->scoped($query, $range, 'created_at');
+        }
+
+        $expr = "DATE(COALESCE({$preferred}, {$fallback}))";
+
+        if ($range->dateFrom !== null) {
+            $query->whereRaw("{$expr} >= ?", [$range->dateFrom]);
+        }
+        if ($range->dateTo !== null) {
+            $query->whereRaw("{$expr} <= ?", [$range->dateTo]);
+        }
+
+        return $query;
+    }
+
+
+    private function registrarSummary(DateRangeFilter $range): array
+    {
+        $students = $this->scoped(StudentProfile::query(), $range);
         $college = (clone $students)->where('academic_level', 'college')->count();
         $shs = (clone $students)->where('academic_level', 'shs')->count();
-        $byProgram = $this->studentsByProgram();
+        $byProgram = $this->studentsByProgram($range);
 
         return [
-            'students' => StudentProfile::count(),
+            'students' => (clone $students)->count(),
             'students_college' => $college,
             'students_shs' => $shs,
-            'pending_grade_changes' => GradeChangeRequest::where('status', 'pending')->count(),
-            'pending_grade_submissions' => GradeSubmission::where('status', 'pending')->count(),
-            'admissions' => Admission::count(),
+            'pending_grade_changes' => $this->scoped(
+                GradeChangeRequest::query()->where('status', 'pending'),
+                $range
+            )->count(),
+            'pending_grade_submissions' => $this->scopedCoalesce(
+                GradeSubmission::query()->where('status', 'pending'),
+                $range,
+                'submitted_at'
+            )->count(),
+            'admissions' => $this->scoped(Admission::query(), $range)->count(),
             'students_by_program' => $byProgram,
             'analytics' => [
                 'students_by_level' => [
@@ -63,15 +127,15 @@ class DashboardController extends Controller
                     ['key' => 'shs', 'label' => 'Senior High', 'total' => $shs],
                 ],
                 'students_by_program' => $byProgram,
-                'admissions_by_status' => $this->admissionsByStatus(),
-                'admissions_by_term' => $this->admissionsByTerm(),
+                'admissions_by_status' => $this->admissionsByStatus($range),
+                'admissions_by_term' => $this->admissionsByTerm($range),
             ],
         ];
     }
 
-    private function studentsByProgram(): array
+    private function studentsByProgram(DateRangeFilter $range): array
     {
-        return StudentProfile::query()
+        return $this->scoped(StudentProfile::query(), $range)
             ->select('program_id', DB::raw('count(*) as total'))
             ->groupBy('program_id')
             ->with('program')
@@ -86,9 +150,9 @@ class DashboardController extends Controller
             ->all();
     }
 
-    private function admissionsByStatus(): array
+    private function admissionsByStatus(DateRangeFilter $range): array
     {
-        $counts = Admission::query()
+        $counts = $this->scoped(Admission::query(), $range)
             ->select('status', DB::raw('count(*) as total'))
             ->groupBy('status')
             ->pluck('total', 'status');
@@ -109,7 +173,7 @@ class DashboardController extends Controller
             ->all();
     }
 
-    private function admissionsByTerm(): array
+    private function admissionsByTerm(DateRangeFilter $range): array
     {
         $termIds = SchoolTerm::query()
             ->orderByDesc('id')
@@ -120,7 +184,7 @@ class DashboardController extends Controller
             return [];
         }
 
-        $counts = Admission::query()
+        $counts = $this->scoped(Admission::query(), $range)
             ->select('school_term_id', DB::raw('count(*) as total'))
             ->whereIn('school_term_id', $termIds)
             ->groupBy('school_term_id')
@@ -139,32 +203,43 @@ class DashboardController extends Controller
             ->all();
     }
 
-    private function adminSummary(): array
+    private function adminSummary(DateRangeFilter $range): array
     {
-        $grades = Grade::query();
+        $grades = $this->scoped(Grade::query(), $range, 'updated_at');
         $totalGrades = (clone $grades)->count();
         $completeGrades = (clone $grades)->whereNotNull('final_grade')->count();
-        $college = StudentProfile::query()->where('academic_level', 'college')->count();
-        $shs = StudentProfile::query()->where('academic_level', 'shs')->count();
-        $byProgram = $this->studentsByProgram();
-        $activeUsers = User::where('is_active', true)->count();
-        $inactiveUsers = User::where('is_active', false)->count();
+
+        $students = $this->scoped(StudentProfile::query(), $range);
+        $college = (clone $students)->where('academic_level', 'college')->count();
+        $shs = (clone $students)->where('academic_level', 'shs')->count();
+        $byProgram = $this->studentsByProgram($range);
+
+        $users = $this->scoped(User::query(), $range);
+        $activeUsers = (clone $users)->where('is_active', true)->count();
+        $inactiveUsers = (clone $users)->where('is_active', false)->count();
 
         return [
-            'students' => StudentProfile::count(),
+            'students' => (clone $students)->count(),
             'students_college' => $college,
             'students_shs' => $shs,
-            'teachers' => User::where('role', 'teacher')->count(),
-            'staff' => User::whereIn('role', ['registrar', 'admin', 'it', 'stakeholder', 'teacher'])->count(),
-            'programs' => Program::count(),
-            'subjects' => Subject::count(),
-            'admissions' => Admission::count(),
-            'class_sections' => ClassSection::count(),
-            'users_total' => User::count(),
+            'teachers' => (clone $users)->where('role', 'teacher')->count(),
+            'staff' => (clone $users)->whereIn('role', ['registrar', 'admin', 'it', 'stakeholder', 'teacher'])->count(),
+            'programs' => $this->scoped(Program::query(), $range)->count(),
+            'subjects' => $this->scoped(Subject::query(), $range)->count(),
+            'admissions' => $this->scoped(Admission::query(), $range)->count(),
+            'class_sections' => $this->scoped(ClassSection::query(), $range)->count(),
+            'users_total' => (clone $users)->count(),
             'users_active' => $activeUsers,
             'users_inactive' => $inactiveUsers,
-            'pending_grade_changes' => GradeChangeRequest::where('status', 'pending')->count(),
-            'pending_grade_submissions' => GradeSubmission::where('status', 'pending')->count(),
+            'pending_grade_changes' => $this->scoped(
+                GradeChangeRequest::query()->where('status', 'pending'),
+                $range
+            )->count(),
+            'pending_grade_submissions' => $this->scopedCoalesce(
+                GradeSubmission::query()->where('status', 'pending'),
+                $range,
+                'submitted_at'
+            )->count(),
             'grade_completion_percent' => $totalGrades > 0 ? round(($completeGrades / $totalGrades) * 100, 1) : 0,
             'students_by_program' => $byProgram,
             'analytics' => [
@@ -173,19 +248,19 @@ class DashboardController extends Controller
                     ['key' => 'shs', 'label' => 'Senior High', 'total' => $shs],
                 ],
                 'students_by_program' => $byProgram,
-                'users_by_role' => $this->usersByRole(),
+                'users_by_role' => $this->usersByRole($range),
                 'users_by_status' => [
                     ['key' => 'active', 'label' => 'Active', 'total' => $activeUsers],
                     ['key' => 'inactive', 'label' => 'Inactive', 'total' => $inactiveUsers],
                 ],
-                'admissions_by_status' => $this->admissionsByStatus(),
+                'admissions_by_status' => $this->admissionsByStatus($range),
             ],
         ];
     }
 
-    private function usersByRole(): array
+    private function usersByRole(DateRangeFilter $range): array
     {
-        $counts = User::query()
+        $counts = $this->scoped(User::query(), $range)
             ->select('role', DB::raw('count(*) as total'))
             ->groupBy('role')
             ->pluck('total', 'role');
@@ -210,16 +285,33 @@ class DashboardController extends Controller
             ->all();
     }
 
-    private function teacherSummary(int $teacherId): array
+    private function teacherSummary(int $teacherId, DateRangeFilter $range): array
     {
+        // Current class load stays as a live snapshot; activity metrics respect the date range.
         $classes = ClassSection::where('teacher_id', $teacherId)->count();
-        $pending = GradeChangeRequest::where('requested_by', $teacherId)->where('status', 'pending')->count();
-        $returned = GradeSubmission::where('status', 'returned')
-            ->whereHas('classSection', fn ($q) => $q->where('teacher_id', $teacherId))
-            ->count();
-        $awaitingReview = GradeSubmission::where('status', 'pending')
-            ->whereHas('classSection', fn ($q) => $q->where('teacher_id', $teacherId))
-            ->count();
+
+        $pending = $this->scoped(
+            GradeChangeRequest::query()
+                ->where('requested_by', $teacherId)
+                ->where('status', 'pending'),
+            $range
+        )->count();
+
+        $returned = $this->scoped(
+            GradeSubmission::query()
+                ->where('status', 'returned')
+                ->whereHas('classSection', fn ($q) => $q->where('teacher_id', $teacherId)),
+            $range,
+            'updated_at'
+        )->count();
+
+        $awaitingReview = $this->scopedCoalesce(
+            GradeSubmission::query()
+                ->where('status', 'pending')
+                ->whereHas('classSection', fn ($q) => $q->where('teacher_id', $teacherId)),
+            $range,
+            'submitted_at'
+        )->count();
 
         return [
             'my_classes' => $classes,
@@ -229,7 +321,7 @@ class DashboardController extends Controller
         ];
     }
 
-    private function studentSummary(User $user): array
+    private function studentSummary(User $user, DateRangeFilter $range): array
     {
         $profile = $user->studentProfile;
         if (! $profile) {
@@ -239,7 +331,10 @@ class DashboardController extends Controller
         $profile->load(['program', 'programMajor']);
 
         return [
-            'admissions_count' => $profile->admissions()->count(),
+            'admissions_count' => $this->scoped(
+                Admission::query()->where('student_profile_id', $profile->id),
+                $range
+            )->count(),
             'program' => $profile->program,
             'program_major' => $profile->programMajor,
             'year_level' => $profile->year_level,

@@ -293,3 +293,93 @@ it('forbids non-IT roles from managing user photos', function () {
         ->deleteJson("/api/users/{$teacher->id}/avatar")
         ->assertForbidden();
 });
+
+it('lets IT update a staff account and staff profile fields', function () {
+    $it = usersItAccount();
+    $teacher = User::factory()->create([
+        'name' => 'Old Teacher Name',
+        'email' => 'old.teacher@westprime.edu',
+        'role' => UserRole::Teacher,
+        'is_active' => true,
+    ]);
+    StaffProfile::create([
+        'user_id' => $teacher->id,
+        'employee_no' => 'TCH-OLD',
+        'department' => 'Old Dept',
+        'position' => 'Instructor',
+        'mobile' => '09000000000',
+    ]);
+
+    $this->actingAs($it, 'sanctum')
+        ->putJson("/api/users/{$teacher->id}", [
+            'name' => 'New Teacher Name',
+            'email' => 'new.teacher@westprime.edu',
+            'role' => 'registrar',
+            'is_active' => true,
+            'employee_no' => 'REG-NEW-1',
+            'department' => 'Registrar Office',
+            'position' => 'Registrar',
+            'mobile' => '09171112222',
+        ])
+        ->assertOk()
+        ->assertJsonPath('name', 'New Teacher Name')
+        ->assertJsonPath('email', 'new.teacher@westprime.edu')
+        ->assertJsonPath('role', 'registrar')
+        ->assertJsonPath('staff_profile.employee_no', 'REG-NEW-1')
+        ->assertJsonPath('staff_profile.department', 'Registrar Office')
+        ->assertJsonPath('staff_profile.mobile', '09171112222');
+});
+
+it('lets IT update a student login account without changing role', function () {
+    $it = usersItAccount();
+    $studentUser = User::factory()->create([
+        'name' => 'STUDENT, DEMO A',
+        'email' => 'demo.student@westprime.edu',
+        'role' => UserRole::Student,
+        'is_active' => true,
+    ]);
+    StudentProfile::create([
+        'user_id' => $studentUser->id,
+        'student_no' => '2026-EDIT-1',
+        'academic_level' => 'college',
+        'last_name' => 'STUDENT',
+        'first_name' => 'DEMO',
+        'middle_name' => 'A',
+    ]);
+
+    $this->actingAs($it, 'sanctum')
+        ->putJson("/api/users/{$studentUser->id}", [
+            'name' => 'STUDENT, UPDATED A',
+            'email' => 'updated.student@westprime.edu',
+            'is_active' => false,
+            'password' => 'newpass1',
+        ])
+        ->assertOk()
+        ->assertJsonPath('name', 'STUDENT, UPDATED A')
+        ->assertJsonPath('email', 'updated.student@westprime.edu')
+        ->assertJsonPath('role', 'student')
+        ->assertJsonPath('is_active', false);
+
+    $this->actingAs($it, 'sanctum')
+        ->putJson("/api/users/{$studentUser->id}", [
+            'name' => 'STUDENT, BLOCKED',
+            'role' => 'teacher',
+        ])
+        ->assertStatus(422);
+});
+
+it('prevents IT from changing their own role or deactivating themselves', function () {
+    $it = usersItAccount();
+
+    $this->actingAs($it, 'sanctum')
+        ->putJson("/api/users/{$it->id}", [
+            'role' => 'admin',
+        ])
+        ->assertStatus(422);
+
+    $this->actingAs($it, 'sanctum')
+        ->putJson("/api/users/{$it->id}", [
+            'is_active' => false,
+        ])
+        ->assertStatus(422);
+});

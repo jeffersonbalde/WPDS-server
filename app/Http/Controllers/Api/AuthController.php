@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Support\Audit;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -21,16 +22,30 @@ class AuthController extends Controller
         $user = User::where('email', $credentials['email'])->first();
 
         if (! $user || ! Hash::check($credentials['password'], $user->password)) {
+            Audit::write($request, 'auth.login_failed', null, null, [
+                'login' => $credentials['email'],
+            ], null);
+
             throw ValidationException::withMessages([
                 'email' => ['These credentials do not match our records.'],
             ]);
         }
 
         if (! $user->is_active) {
+            Audit::write($request, 'auth.login_blocked', $user, null, [
+                'login' => $user->email,
+                'reason' => 'deactivated',
+            ], $user->id);
+
             return response()->json(['message' => 'Account is deactivated.'], 403);
         }
 
         $token = $user->createToken('wpds-portal')->plainTextToken;
+
+        Audit::write($request, 'auth.login', $user, null, [
+            'login' => $user->email,
+            'role' => $user->role instanceof \BackedEnum ? $user->role->value : (string) $user->role,
+        ], $user->id);
 
         return response()->json([
             'token' => $token,
@@ -47,7 +62,17 @@ class AuthController extends Controller
 
     public function logout(Request $request): JsonResponse
     {
-        $request->user()->currentAccessToken()->delete();
+        $user = $request->user();
+
+        Audit::write($request, 'auth.logout', $user, null, [
+            'login' => $user->email,
+            'role' => $user->role instanceof \BackedEnum ? $user->role->value : (string) $user->role,
+        ], $user->id);
+
+        $token = $user->currentAccessToken();
+        if ($token) {
+            $token->delete();
+        }
 
         return response()->json(['message' => 'Logged out.']);
     }

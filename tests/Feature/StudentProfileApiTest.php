@@ -11,6 +11,7 @@ use App\Models\StudentProfile;
 use App\Models\Subject;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Storage;
 
 uses(RefreshDatabase::class);
 
@@ -207,4 +208,54 @@ it('forbids teachers from deleting students', function () {
         ->assertForbidden();
 
     $this->assertDatabaseHas('student_profiles', ['id' => $student->id]);
+});
+
+it('lets IT update a student profile like Registrar Edit Profile', function () {
+    $it = User::factory()->create(['role' => UserRole::It, 'is_active' => true]);
+    $student = makeStudentProfileRecord([
+        'student_no' => '2026-EDIT-IT',
+        'last_name' => 'OLD',
+        'first_name' => 'NAME',
+    ]);
+
+    $this->actingAs($it, 'sanctum')
+        ->putJson('/api/students/'.$student->id, [
+            'last_name' => 'BALDE',
+            'first_name' => 'JEFFERSON',
+            'middle_name' => 'S',
+            'mobile' => '09181234567',
+            'address_line_1' => 'LUMBIA, PAGADIAN CITY',
+        ])
+        ->assertOk()
+        ->assertJsonPath('last_name', 'BALDE')
+        ->assertJsonPath('first_name', 'JEFFERSON')
+        ->assertJsonPath('mobile', '09181234567');
+
+    expect($student->user->fresh()->name)->toBe('BALDE, JEFFERSON S');
+});
+
+it('lets IT and Registrar update a student portal photo', function () {
+    Storage::fake('public');
+    $it = User::factory()->create(['role' => UserRole::It, 'is_active' => true]);
+    $registrar = studentApiRegistrar();
+    $student = makeStudentProfileRecord(['student_no' => '2026-PHOTO-1']);
+
+    $this->actingAs($it, 'sanctum')
+        ->post('/api/students/'.$student->id.'/avatar', [
+            'avatar' => Illuminate\Http\UploadedFile::fake()->image('student.jpg'),
+        ])
+        ->assertOk()
+        ->assertJsonPath('user.avatar_url', fn ($url) => is_string($url) && $url !== '')
+        ->assertJsonPath('avatar_url', fn ($url) => is_string($url) && $url !== '');
+
+    $path = $student->user->fresh()->getRawOriginal('avatar_path');
+    Storage::disk('public')->assertExists($path);
+
+    $this->actingAs($registrar, 'sanctum')
+        ->deleteJson('/api/students/'.$student->id.'/avatar')
+        ->assertOk()
+        ->assertJsonPath('user.avatar_url', null)
+        ->assertJsonPath('avatar_url', null);
+
+    Storage::disk('public')->assertMissing($path);
 });

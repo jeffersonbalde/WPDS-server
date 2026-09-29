@@ -33,6 +33,8 @@ Route::get('/health', function () {
     ]);
 });
 
+Route::get('/branding', [SystemController::class, 'showBranding']);
+
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/me', [AuthController::class, 'me']);
@@ -142,7 +144,6 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('/announcements/{announcement}', [AnnouncementController::class, 'destroy']);
 
         Route::post('/students', [StudentProfileController::class, 'store']);
-        Route::put('/students/{student}', [StudentProfileController::class, 'update']);
         Route::delete('/students/{student}', [StudentProfileController::class, 'destroy']);
 
         Route::post('/admissions', [AdmissionController::class, 'store']);
@@ -157,6 +158,14 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/grade-change-requests/{gradeChangeRequest}/review', [GradeChangeRequestController::class, 'review']);
         Route::post('/grade-submissions/{gradeSubmission}/review', [GradeSubmissionController::class, 'review']);
     });
+
+    // Full student profile edit — Registrar (Students) and IT (User Management).
+    Route::put('/students/{student}', [StudentProfileController::class, 'update'])
+        ->middleware(EnsureUserHasRole::class.':registrar,it');
+    Route::post('/students/{student}/avatar', [StudentProfileController::class, 'updateAvatar'])
+        ->middleware(EnsureUserHasRole::class.':registrar,it');
+    Route::delete('/students/{student}/avatar', [StudentProfileController::class, 'destroyAvatar'])
+        ->middleware(EnsureUserHasRole::class.':registrar,it');
 
     Route::middleware(EnsureUserHasRole::class.':it')->group(function () {
         Route::get('/users', [UserManagementController::class, 'index']);
@@ -177,6 +186,15 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/system/backup-schedule', [SystemController::class, 'showSchedule']);
         Route::put('/system/backup-schedule', [SystemController::class, 'updateSchedule']);
         Route::put('/system/password', [SystemController::class, 'changePassword']);
+        Route::get('/system/branding', [SystemController::class, 'showBranding']);
+        Route::put('/system/branding', [SystemController::class, 'updateBranding']);
+        Route::post('/system/branding/logo', [SystemController::class, 'uploadBrandingLogo']);
+        Route::delete('/system/branding/logo', [SystemController::class, 'clearBrandingLogo']);
+        Route::post('/system/branding/favicon', [SystemController::class, 'uploadBrandingFavicon']);
+        Route::delete('/system/branding/favicon', [SystemController::class, 'clearBrandingFavicon']);
+        Route::post('/system/branding/login-bg', [SystemController::class, 'uploadBrandingLoginBackground']);
+        Route::delete('/system/branding/login-bg', [SystemController::class, 'clearBrandingLoginBackground']);
+        Route::post('/system/branding/reset', [SystemController::class, 'resetBranding']);
     });
 
     Route::middleware(EnsureUserHasRole::class.':admin,stakeholder')->group(function () {
@@ -192,4 +210,14 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/audit-logs', [AuditLogController::class, 'index'])
         ->middleware(EnsureUserHasRole::class.':it,admin,stakeholder');
+    Route::get('/audit-logs/retention', [AuditLogController::class, 'showRetention'])
+        ->middleware(EnsureUserHasRole::class.':it,admin,stakeholder');
+    Route::put('/audit-logs/retention', [AuditLogController::class, 'updateRetention'])
+        ->middleware(EnsureUserHasRole::class.':it');
+    Route::delete('/audit-logs', [AuditLogController::class, 'destroyMany'])
+        ->middleware(EnsureUserHasRole::class.':it');
+    Route::post('/audit-logs/prune', [AuditLogController::class, 'prune'])
+        ->middleware(EnsureUserHasRole::class.':it');
+    Route::delete('/audit-logs/{auditLog}', [AuditLogController::class, 'destroy'])
+        ->middleware(EnsureUserHasRole::class.':it');
 });

@@ -6,10 +6,12 @@ use App\Enums\UserRole;
 use App\Http\Controllers\Controller;
 use App\Models\StudentProfile;
 use App\Models\User;
+use App\Support\Audit;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
@@ -530,6 +532,16 @@ class StudentProfileController extends Controller
 
         $profile->load(['user', 'program', 'programMajor']);
 
+        $fullName = trim($profile->last_name.', '.$profile->first_name.($profile->middle_name ? ' '.$profile->middle_name : ''));
+        Audit::write($request, 'student.created', $profile, null, [
+            'student_no' => $profile->student_no,
+            'name' => $fullName,
+            'academic_level' => $profile->academic_level instanceof \BackedEnum
+                ? $profile->academic_level->value
+                : (string) $profile->academic_level,
+            'program_id' => $profile->program_id,
+        ]);
+
         return response()->json([
             ...$profile->toArray(),
             'portal_credentials' => [
@@ -554,7 +566,7 @@ class StudentProfileController extends Controller
             'admissions.enrollmentSubjects.grade',
         ]);
 
-        return response()->json($student);
+        return response()->json($this->studentPayload($student));
     }
 
     public function update(Request $request, StudentProfile $student): JsonResponse
@@ -651,12 +663,58 @@ class StudentProfileController extends Controller
         ]));
     }
 
+    public function updateAvatar(Request $request, StudentProfile $student): JsonResponse
+    {
+        $data = $request->validate([
+            'avatar' => ['required', 'image', 'mimes:jpg,jpeg,png,webp', 'max:20480'],
+        ]);
+
+        $user = $student->user;
+        if (! $user) {
+            return response()->json(['message' => 'This student has no portal account.'], 422);
+        }
+
+        $oldPath = $user->getRawOriginal('avatar_path');
+        $newPath = $data['avatar']->store('avatars', 'public');
+        $user->update(['avatar_path' => $newPath]);
+
+        if ($oldPath) {
+            Storage::disk('public')->delete($oldPath);
+        }
+
+        return response()->json($this->studentPayload($student->fresh()->load([
+            'user',
+            'program',
+            'programMajor',
+        ])));
+    }
+
+    public function destroyAvatar(StudentProfile $student): JsonResponse
+    {
+        $user = $student->user;
+        if (! $user) {
+            return response()->json(['message' => 'This student has no portal account.'], 422);
+        }
+
+        $oldPath = $user->getRawOriginal('avatar_path');
+        if ($oldPath) {
+            Storage::disk('public')->delete($oldPath);
+            $user->update(['avatar_path' => null]);
+        }
+
+        return response()->json($this->studentPayload($student->fresh()->load([
+            'user',
+            'program',
+            'programMajor',
+        ])));
+    }
+
     public function usage(StudentProfile $student): JsonResponse
     {
         return response()->json($student->deletionUsage());
     }
 
-    public function destroy(StudentProfile $student): JsonResponse
+    public function destroy(Request $request, StudentProfile $student): JsonResponse
     {
         $usage = $student->deletionUsage();
         if (! $usage['can_delete']) {
@@ -665,6 +723,12 @@ class StudentProfileController extends Controller
                 'usage' => $usage,
             ], 422);
         }
+
+        $snapshot = [
+            'student_no' => $student->student_no,
+            'name' => trim($student->last_name.', '.$student->first_name.($student->middle_name ? ' '.$student->middle_name : '')),
+            'user_id' => $student->user_id,
+        ];
 
         DB::transaction(function () use ($student) {
             $user = $student->user;
@@ -675,6 +739,8 @@ class StudentProfileController extends Controller
                 $user->delete();
             }
         });
+
+        Audit::write($request, 'student.deleted', null, $snapshot, null);
 
         return response()->json(['message' => 'Student deleted.']);
     }
@@ -687,9 +753,9 @@ class StudentProfileController extends Controller
             return response()->json(['message' => 'No student profile found.'], 404);
         }
 
-        $profile->load(['program', 'programMajor', 'user:id,name,email']);
+        $profile->load(['program', 'programMajor', 'user']);
 
-        return response()->json($profile);
+        return response()->json($this->studentPayload($profile));
     }
 
     public function updateMyProfile(Request $request): JsonResponse
@@ -697,5 +763,16 @@ class StudentProfileController extends Controller
         return response()->json([
             'message' => 'Profile details can only be updated by the Registrar.',
         ], 403);
+    }
+
+    private function studentPayload(StudentProfile $student): StudentProfile
+    {
+        if (! $student->relationLoaded('user')) {
+            $student->load('user');
+        }
+
+        $student->setAttribute('avatar_url', $student->user?->avatar_url);
+
+        return $student;
     }
 }

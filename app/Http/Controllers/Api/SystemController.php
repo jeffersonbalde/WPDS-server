@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\AuditLog;
 use App\Models\User;
 use App\Services\BackupScheduleService;
+use App\Services\BrandingService;
 use App\Services\DatabaseBackupService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -18,6 +19,187 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class SystemController extends Controller
 {
+    public function showBranding(BrandingService $branding): JsonResponse
+    {
+        return response()->json($branding->publicPayload());
+    }
+
+    public function updateBranding(Request $request, BrandingService $branding): JsonResponse
+    {
+        $data = $request->validate([
+            'system_name' => ['required', 'string', 'max:120'],
+            'system_short_name' => ['required', 'string', 'max:80'],
+            'tagline' => ['required', 'string', 'max:160'],
+            'login_heading' => ['required', 'string', 'max:120'],
+            'login_subtitle' => ['required', 'string', 'max:240'],
+            'footer_text' => ['required', 'string', 'max:160'],
+        ]);
+
+        $payload = $branding->saveTexts($data);
+
+        AuditLog::create([
+            'user_id' => $request->user()->id,
+            'action' => 'system.branding_updated',
+            'auditable_type' => null,
+            'auditable_id' => null,
+            'new_values' => [
+                'system_name' => $payload['system_name'],
+                'system_short_name' => $payload['system_short_name'],
+                'tagline' => $payload['tagline'],
+                'login_heading' => $payload['login_heading'],
+                'login_subtitle' => $payload['login_subtitle'],
+                'footer_text' => $payload['footer_text'],
+            ],
+            'ip_address' => $request->ip(),
+        ]);
+
+        return response()->json([
+            'message' => 'Branding texts saved.',
+            'branding' => $payload,
+        ]);
+    }
+
+    public function uploadBrandingLogo(Request $request, BrandingService $branding): JsonResponse
+    {
+        $data = $request->validate([
+            'logo' => ['required', 'image', 'mimes:jpg,jpeg,png,webp', 'max:20480'],
+        ]);
+
+        $payload = $branding->storeLogo($data['logo']);
+
+        AuditLog::create([
+            'user_id' => $request->user()->id,
+            'action' => 'system.branding_logo_updated',
+            'auditable_type' => null,
+            'auditable_id' => null,
+            'new_values' => ['has_custom_logo' => true],
+            'ip_address' => $request->ip(),
+        ]);
+
+        return response()->json([
+            'message' => 'System logo updated.',
+            'branding' => $payload,
+        ]);
+    }
+
+    public function uploadBrandingFavicon(Request $request, BrandingService $branding): JsonResponse
+    {
+        $data = $request->validate([
+            'favicon' => ['required', 'image', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
+        ]);
+
+        $payload = $branding->storeFavicon($data['favicon']);
+
+        AuditLog::create([
+            'user_id' => $request->user()->id,
+            'action' => 'system.branding_favicon_updated',
+            'auditable_type' => null,
+            'auditable_id' => null,
+            'new_values' => ['has_custom_favicon' => true],
+            'ip_address' => $request->ip(),
+        ]);
+
+        return response()->json([
+            'message' => 'Favicon updated.',
+            'branding' => $payload,
+        ]);
+    }
+
+    public function uploadBrandingLoginBackground(Request $request, BrandingService $branding): JsonResponse
+    {
+        $data = $request->validate([
+            'login_bg' => ['required', 'image', 'mimes:jpg,jpeg,png,webp', 'max:10240'],
+        ]);
+
+        $payload = $branding->storeLoginBackground($data['login_bg']);
+
+        AuditLog::create([
+            'user_id' => $request->user()->id,
+            'action' => 'system.branding_login_bg_updated',
+            'auditable_type' => null,
+            'auditable_id' => null,
+            'new_values' => ['has_custom_login_bg' => true],
+            'ip_address' => $request->ip(),
+        ]);
+
+        return response()->json([
+            'message' => 'Login background updated.',
+            'branding' => $payload,
+        ]);
+    }
+
+    public function clearBrandingLogo(Request $request, BrandingService $branding): JsonResponse
+    {
+        $payload = $branding->clearLogo();
+
+        AuditLog::create([
+            'user_id' => $request->user()->id,
+            'action' => 'system.branding_logo_cleared',
+            'auditable_type' => null,
+            'auditable_id' => null,
+            'ip_address' => $request->ip(),
+        ]);
+
+        return response()->json([
+            'message' => 'System logo restored to default.',
+            'branding' => $payload,
+        ]);
+    }
+
+    public function clearBrandingFavicon(Request $request, BrandingService $branding): JsonResponse
+    {
+        $payload = $branding->clearFavicon();
+
+        AuditLog::create([
+            'user_id' => $request->user()->id,
+            'action' => 'system.branding_favicon_cleared',
+            'auditable_type' => null,
+            'auditable_id' => null,
+            'ip_address' => $request->ip(),
+        ]);
+
+        return response()->json([
+            'message' => 'Favicon restored to default.',
+            'branding' => $payload,
+        ]);
+    }
+
+    public function clearBrandingLoginBackground(Request $request, BrandingService $branding): JsonResponse
+    {
+        $payload = $branding->clearLoginBackground();
+
+        AuditLog::create([
+            'user_id' => $request->user()->id,
+            'action' => 'system.branding_login_bg_cleared',
+            'auditable_type' => null,
+            'auditable_id' => null,
+            'ip_address' => $request->ip(),
+        ]);
+
+        return response()->json([
+            'message' => 'Login background restored to default.',
+            'branding' => $payload,
+        ]);
+    }
+
+    public function resetBranding(Request $request, BrandingService $branding): JsonResponse
+    {
+        $payload = $branding->resetToDefaults();
+
+        AuditLog::create([
+            'user_id' => $request->user()->id,
+            'action' => 'system.branding_reset',
+            'auditable_type' => null,
+            'auditable_id' => null,
+            'ip_address' => $request->ip(),
+        ]);
+
+        return response()->json([
+            'message' => 'Branding restored to defaults.',
+            'branding' => $payload,
+        ]);
+    }
+
     public function status(DatabaseBackupService $backups, BackupScheduleService $schedule): JsonResponse
     {
         // Catch up a due scheduled backup when IT opens this page (helps without OS cron).

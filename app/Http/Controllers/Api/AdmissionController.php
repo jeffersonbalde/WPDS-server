@@ -11,6 +11,7 @@ use App\Models\GradeSubmission;
 use App\Models\Program;
 use App\Models\SchoolTerm;
 use App\Models\StudentProfile;
+use App\Support\Audit;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -270,6 +271,24 @@ class AdmissionController extends Controller
             return $admission;
         });
 
+        $admission->loadMissing('studentProfile');
+        $studentName = trim(
+            ($admission->studentProfile?->last_name ?? '').', '.($admission->studentProfile?->first_name ?? '')
+        , ' ,');
+
+        Audit::write($request, 'admission.created', $admission, null, [
+            'admission_number' => $admission->admission_number,
+            'student_profile_id' => $admission->student_profile_id,
+            'student_name' => $studentName !== '' ? $studentName : null,
+            'student_no' => $admission->studentProfile?->student_no,
+            'school_term_id' => $admission->school_term_id,
+            'program_id' => $admission->program_id,
+            'year_level' => $admission->year_level,
+            'section' => $admission->section,
+            'status' => $admission->status,
+            'class_section_ids' => $classSectionIds ?? ($data['class_section_ids'] ?? []),
+        ]);
+
         return response()->json($admission->load([
             'studentProfile.user',
             'schoolTerm',
@@ -361,7 +380,21 @@ class AdmissionController extends Controller
         ]);
 
         if ($admission->status !== $data['status']) {
+            $oldStatus = $admission->status;
             $admission->update(['status' => $data['status']]);
+            $admission->loadMissing('studentProfile');
+            $studentName = trim(
+                ($admission->studentProfile?->last_name ?? '').', '.($admission->studentProfile?->first_name ?? '')
+            , ' ,');
+
+            Audit::write($request, 'admission.status_updated', $admission, [
+                'status' => $oldStatus,
+            ], [
+                'status' => $data['status'],
+                'admission_number' => $admission->admission_number,
+                'student_name' => $studentName !== '' ? $studentName : null,
+                'student_no' => $admission->studentProfile?->student_no,
+            ]);
         }
 
         return response()->json($admission->fresh()->load([
@@ -372,7 +405,7 @@ class AdmissionController extends Controller
         ]));
     }
 
-    public function destroy(Admission $admission): JsonResponse
+    public function destroy(Request $request, Admission $admission): JsonResponse
     {
         $usage = $this->deleteUsagePayload($admission);
 
@@ -383,9 +416,25 @@ class AdmissionController extends Controller
             ], 422);
         }
 
+        $admission->loadMissing('studentProfile');
+        $studentName = trim(
+            ($admission->studentProfile?->last_name ?? '').', '.($admission->studentProfile?->first_name ?? '')
+        , ' ,');
+        $snapshot = [
+            'admission_number' => $admission->admission_number,
+            'student_profile_id' => $admission->student_profile_id,
+            'student_name' => $studentName !== '' ? $studentName : null,
+            'student_no' => $admission->studentProfile?->student_no,
+            'school_term_id' => $admission->school_term_id,
+            'program_id' => $admission->program_id,
+            'status' => $admission->status,
+        ];
+
         DB::transaction(function () use ($admission) {
             $admission->delete();
         });
+
+        Audit::write($request, 'admission.deleted', null, $snapshot, null);
 
         return response()->json(['message' => 'Admission deleted.']);
     }
@@ -406,6 +455,18 @@ class AdmissionController extends Controller
                 Grade::firstOrCreate(['enrollment_subject_id' => $enrollment->id]);
             }
         });
+
+        $admission->loadMissing('studentProfile');
+        $studentName = trim(
+            ($admission->studentProfile?->last_name ?? '').', '.($admission->studentProfile?->first_name ?? '')
+        , ' ,');
+
+        Audit::write($request, 'admission.subjects_enrolled', $admission, null, [
+            'admission_number' => $admission->admission_number,
+            'student_name' => $studentName !== '' ? $studentName : null,
+            'student_no' => $admission->studentProfile?->student_no,
+            'class_section_ids' => array_values(array_map('intval', $data['class_section_ids'])),
+        ]);
 
         return response()->json($admission->fresh()->load([
             'enrollmentSubjects.classSection.subject',

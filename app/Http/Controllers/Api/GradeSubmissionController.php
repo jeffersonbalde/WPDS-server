@@ -153,6 +153,8 @@ class GradeSubmissionController extends Controller
                 $this->refreshLockState($gradeSubmission->class_section_id);
             }
 
+            $gradeSubmission->loadMissing('classSection.subject');
+
             AuditLog::create([
                 'user_id' => $request->user()->id,
                 'action' => $data['action'] === 'released'
@@ -163,6 +165,8 @@ class GradeSubmissionController extends Controller
                 'new_values' => [
                     'period' => $gradeSubmission->period,
                     'class_section_id' => $gradeSubmission->class_section_id,
+                    'subject_code' => $gradeSubmission->classSection?->subject?->code,
+                    'subject' => $gradeSubmission->classSection?->subject?->title,
                 ],
                 'ip_address' => $request->ip(),
             ]);

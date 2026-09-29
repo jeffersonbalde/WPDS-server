@@ -163,7 +163,11 @@ class UserManagementController extends Controller
                 'action' => 'user.created',
                 'auditable_type' => User::class,
                 'auditable_id' => $user->id,
-                'new_values' => ['email' => $user->email, 'role' => $user->role->value],
+                'new_values' => [
+                    'name' => $user->name,
+                    'email' => $user->email,
+                    'role' => $user->role->value,
+                ],
                 'ip_address' => $request->ip(),
             ]);
 
@@ -175,34 +179,137 @@ class UserManagementController extends Controller
 
     public function update(Request $request, User $user): JsonResponse
     {
-        $data = $request->validate([
-            'name' => ['sometimes', 'string', 'max:255'],
-            'email' => ['sometimes', 'email', Rule::unique('users', 'email')->ignore($user->id)],
-            'role' => ['sometimes', Rule::in(array_column(UserRole::cases(), 'value'))],
-            'is_active' => ['sometimes', 'boolean'],
-            'password' => ['nullable', 'string', 'min:6'],
-        ]);
+        $user->load('staffProfile');
 
-        if (! empty($data['password'])) {
-            // User model casts password to hashed
+        $loginRule = [
+            'sometimes',
+            'required',
+            'string',
+            'max:255',
+            Rule::unique('users', 'email')->ignore($user->id),
+            function (string $attribute, mixed $value, \Closure $fail) {
+                $value = trim((string) $value);
+                if (str_contains($value, '@')) {
+                    if (! filter_var($value, FILTER_VALIDATE_EMAIL)) {
+                        $fail('Enter a valid email address or username.');
+                    }
+
+                    return;
+                }
+                if (! preg_match('/^[a-zA-Z0-9._-]{3,60}$/', $value)) {
+                    $fail('Username must be 3–60 characters (letters, numbers, . _ -).');
+                }
+            },
+        ];
+
+        $staffRoleValues = [
+            UserRole::Teacher->value,
+            UserRole::Registrar->value,
+            UserRole::Admin->value,
+            UserRole::It->value,
+            UserRole::Stakeholder->value,
+        ];
+
+        if ($user->role === UserRole::Student) {
+            $data = $request->validate([
+                'name' => ['sometimes', 'required', 'string', 'max:255'],
+                'email' => $loginRule,
+                'is_active' => ['sometimes', 'boolean'],
+                'password' => ['nullable', 'string', 'min:6'],
+            ]);
+
+            if ($request->exists('role')) {
+                return response()->json([
+                    'message' => 'Student role cannot be changed here. Use Registrar student records for academic profile edits.',
+                ], 422);
+            }
         } else {
+            $data = $request->validate([
+                'name' => ['sometimes', 'required', 'string', 'max:255'],
+                'email' => $loginRule,
+                'role' => ['sometimes', 'required', Rule::in($staffRoleValues)],
+                'is_active' => ['sometimes', 'boolean'],
+                'password' => ['nullable', 'string', 'min:6'],
+                'employee_no' => [
+                    'nullable', 'string', 'max:50',
+                    Rule::unique('staff_profiles', 'employee_no')->ignore($user->staffProfile?->id),
+                ],
+                'department' => ['nullable', 'string', 'max:255'],
+                'position' => ['nullable', 'string', 'max:255'],
+                'mobile' => ['nullable', 'string', 'max:30'],
+            ]);
+        }
+
+        if ($request->user()->id === $user->id) {
+            if (array_key_exists('is_active', $data) && ! $data['is_active']) {
+                return response()->json([
+                    'message' => 'You cannot deactivate your own account.',
+                ], 422);
+            }
+            if (array_key_exists('role', $data) && $data['role'] !== $user->role->value) {
+                return response()->json([
+                    'message' => 'You cannot change your own role.',
+                ], 422);
+            }
+        }
+
+        if (empty($data['password'])) {
             unset($data['password']);
         }
 
+        $staffFields = ['employee_no', 'department', 'position', 'mobile'];
+        $staffData = [];
+        foreach ($staffFields as $field) {
+            if (array_key_exists($field, $data)) {
+                $staffData[$field] = $data[$field];
+                unset($data[$field]);
+            }
+        }
+
         $old = $user->only(['name', 'email', 'role', 'is_active']);
-        $user->update($data);
+        $oldStaff = $user->staffProfile?->only($staffFields);
+
+        DB::transaction(function () use ($user, $data, $staffData) {
+            if ($data !== []) {
+                $user->update($data);
+            }
+
+            if ($staffData !== [] && $user->role !== UserRole::Student) {
+                $profile = $user->staffProfile;
+                if ($profile) {
+                    $profile->update($staffData);
+                } else {
+                    StaffProfile::create(array_merge([
+                        'user_id' => $user->id,
+                        'department' => 'West Prime Horizon Institute',
+                        'position' => $user->fresh()->role->label(),
+                    ], $staffData));
+                }
+            }
+        });
+
+        $user->refresh()->load(['studentProfile', 'staffProfile']);
 
         AuditLog::create([
             'user_id' => $request->user()->id,
             'action' => 'user.updated',
             'auditable_type' => User::class,
             'auditable_id' => $user->id,
-            'old_values' => $old,
-            'new_values' => $user->only(['name', 'email', 'role', 'is_active']),
+            'old_values' => array_filter([
+                ...$old,
+                'staff_profile' => $oldStaff,
+            ]),
+            'new_values' => array_filter([
+                'name' => $user->name,
+                'email' => $user->email,
+                'role' => $user->role instanceof \BackedEnum ? $user->role->value : (string) $user->role,
+                'is_active' => $user->is_active,
+                'staff_profile' => $user->staffProfile?->only($staffFields),
+            ]),
             'ip_address' => $request->ip(),
         ]);
 
-        return response()->json($user->fresh()->load(['studentProfile', 'staffProfile']));
+        return response()->json($user);
     }
 
     public function resetPassword(Request $request, User $user): JsonResponse
@@ -218,6 +325,11 @@ class UserManagementController extends Controller
             'action' => 'user.password_reset',
             'auditable_type' => User::class,
             'auditable_id' => $user->id,
+            'new_values' => [
+                'name' => $user->name,
+                'email' => $user->email,
+                'role' => $user->role->value,
+            ],
             'ip_address' => $request->ip(),
         ]);
 
@@ -244,6 +356,10 @@ class UserManagementController extends Controller
             'action' => 'user.avatar_updated',
             'auditable_type' => User::class,
             'auditable_id' => $user->id,
+            'new_values' => [
+                'name' => $user->name,
+                'email' => $user->email,
+            ],
             'ip_address' => $request->ip(),
         ]);
 
@@ -263,6 +379,10 @@ class UserManagementController extends Controller
                 'action' => 'user.avatar_removed',
                 'auditable_type' => User::class,
                 'auditable_id' => $user->id,
+                'new_values' => [
+                    'name' => $user->name,
+                    'email' => $user->email,
+                ],
                 'ip_address' => $request->ip(),
             ]);
         }
