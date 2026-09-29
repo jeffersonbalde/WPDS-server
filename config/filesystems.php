@@ -6,11 +6,6 @@ return [
     |--------------------------------------------------------------------------
     | Default Filesystem Disk
     |--------------------------------------------------------------------------
-    |
-    | Here you may specify the default filesystem disk that should be used
-    | by the framework. The "local" disk, as well as a variety of cloud
-    | based disks are available to your application for file storage.
-    |
     */
 
     'default' => env('FILESYSTEM_DISK', 'local'),
@@ -20,11 +15,11 @@ return [
     | Filesystem Disks
     |--------------------------------------------------------------------------
     |
-    | Below you may configure as many filesystem disks as necessary, and you
-    | may even configure multiple disks for the same driver. Examples for
-    | most supported storage drivers are configured here for reference.
-    |
-    | Supported drivers: "local", "ftp", "sftp", "s3"
+    | "public" holds avatars and other browser-visible uploads.
+    | - Local: files under storage/app/public (served via public/storage link)
+    | - Spaces/S3: when AWS_ACCESS_KEY_ID is set. root MUST be a bucket-relative
+    |   prefix (usually empty), never a local filesystem path — otherwise keys
+    |   become /workspace/storage/app/public/... and URLs 403 on DigitalOcean.
     |
     */
 
@@ -38,24 +33,33 @@ return [
             'report' => false,
         ],
 
-        // Uploaded files (avatars, etc.) served publicly. Uses local disk storage
-        // by default, or S3-compatible object storage (e.g. DigitalOcean Spaces)
-        // when AWS_ACCESS_KEY_ID is set — object storage persists across deploys,
-        // unlike local disk on ephemeral hosting.
-        'public' => [
+        'public' => array_filter([
             'driver' => env('AWS_ACCESS_KEY_ID') ? 's3' : 'local',
-            'root' => storage_path('app/public'),
-            'url' => env('AWS_URL') ?: rtrim(env('APP_URL', 'http://localhost'), '/').'/storage',
+            // S3/Spaces: empty root (or AWS_ROOT_PATH prefix). Local: storage/app/public.
+            'root' => env('AWS_ACCESS_KEY_ID')
+                ? (string) env('AWS_ROOT_PATH', '')
+                : storage_path('app/public'),
+            'url' => env('AWS_URL')
+                ?: (env('AWS_ACCESS_KEY_ID')
+                    ? null
+                    : rtrim((string) env('APP_URL', 'http://localhost'), '/').'/storage'),
             'visibility' => 'public',
+            'directory_visibility' => 'public',
             'throw' => false,
             'report' => false,
-            'key' => env('AWS_ACCESS_KEY_ID'),
-            'secret' => env('AWS_SECRET_ACCESS_KEY'),
-            'region' => env('AWS_DEFAULT_REGION'),
-            'bucket' => env('AWS_BUCKET'),
-            'endpoint' => env('AWS_ENDPOINT'),
-            'use_path_style_endpoint' => env('AWS_USE_PATH_STYLE_ENDPOINT', false),
-        ],
+            'key' => env('AWS_ACCESS_KEY_ID') ?: null,
+            'secret' => env('AWS_SECRET_ACCESS_KEY') ?: null,
+            'region' => env('AWS_DEFAULT_REGION') ?: null,
+            'bucket' => env('AWS_BUCKET') ?: null,
+            'endpoint' => env('AWS_ENDPOINT') ?: null,
+            'use_path_style_endpoint' => filter_var(
+                env('AWS_USE_PATH_STYLE_ENDPOINT', false),
+                FILTER_VALIDATE_BOOLEAN
+            ),
+            'options' => env('AWS_ACCESS_KEY_ID') ? [
+                'ACL' => 'public-read',
+            ] : null,
+        ], static fn ($value) => $value !== null),
 
         's3' => [
             'driver' => 's3',
@@ -66,6 +70,7 @@ return [
             'url' => env('AWS_URL'),
             'endpoint' => env('AWS_ENDPOINT'),
             'use_path_style_endpoint' => env('AWS_USE_PATH_STYLE_ENDPOINT', false),
+            'visibility' => 'public',
             'throw' => false,
             'report' => false,
         ],
@@ -76,11 +81,6 @@ return [
     |--------------------------------------------------------------------------
     | Symbolic Links
     |--------------------------------------------------------------------------
-    |
-    | Here you may configure the symbolic links that will be created when the
-    | `storage:link` Artisan command is executed. The array keys should be
-    | the locations of the links and the values should be their targets.
-    |
     */
 
     'links' => [

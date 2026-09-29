@@ -35,6 +35,11 @@ class SeedDemoAvatarsCommand extends Command
             '--force' => true,
         ]);
 
+        $this->newLine();
+        $this->line('If Spaces is configured, URLs should look like:');
+        $this->line('  https://<bucket>.<region>.digitaloceanspaces.com/avatars/demo-user-1.jpg');
+        $this->line('Not .../workspace/storage/app/public/avatars/...');
+
         return self::SUCCESS;
     }
 }

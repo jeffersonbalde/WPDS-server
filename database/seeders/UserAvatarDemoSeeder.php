@@ -81,7 +81,9 @@ class UserAvatarDemoSeeder extends Seeder
             }
 
             $filename = 'avatars/demo-user-'.$user->id.'.jpg';
-            Storage::disk('public')->put($filename, $bytes);
+            Storage::disk('public')->put($filename, $bytes, [
+                'visibility' => 'public',
+            ]);
 
             $old = $user->getRawOriginal('avatar_path');
             if ($old && $old !== $filename && Storage::disk('public')->exists($old)) {
