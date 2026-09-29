@@ -236,7 +236,7 @@ it('rejects an oversized avatar', function () {
         'password' => 'password',
         'role' => 'teacher',
         'employee_no' => 'TCH-103',
-        'avatar' => UploadedFile::fake()->image('huge.jpg')->size(3000),
+        'avatar' => UploadedFile::fake()->image('huge.jpg')->size(21000),
     ])->assertStatus(422)->assertJsonValidationErrors(['avatar']);
 });
 

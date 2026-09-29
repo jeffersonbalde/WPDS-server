@@ -131,7 +131,7 @@ class UserManagementController extends Controller
             'department' => ['nullable', 'string', 'max:255'],
             'position' => ['nullable', 'string', 'max:255'],
             'mobile' => ['nullable', 'string', 'max:30'],
-            'avatar' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
+            'avatar' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:20480'],
         ]);
 
         $avatarPath = $request->hasFile('avatar')
@@ -227,7 +227,7 @@ class UserManagementController extends Controller
     public function updateAvatar(Request $request, User $user): JsonResponse
     {
         $data = $request->validate([
-            'avatar' => ['required', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
+            'avatar' => ['required', 'image', 'mimes:jpg,jpeg,png,webp', 'max:20480'],
         ]);
 
         $oldPath = $user->getRawOriginal('avatar_path');

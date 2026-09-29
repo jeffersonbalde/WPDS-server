@@ -18,6 +18,27 @@ it('logs in demo users and rejects inactive accounts', function () {
     expect($response->json('user.role'))->toBe('teacher');
 });
 
+it('expires a login token after the configured window', function () {
+    $this->seed();
+    config(['sanctum.expiration' => 480]);
+
+    $token = $this->postJson('/api/login', [
+        'email' => 'teacher@westprime.edu',
+        'password' => 'password',
+    ])->assertOk()->json('token');
+
+    $this->withHeaders(['Authorization' => "Bearer {$token}"])
+        ->getJson('/api/me')
+        ->assertOk();
+
+    $this->travel(481)->minutes();
+    auth()->forgetGuards();
+
+    $this->withHeaders(['Authorization' => "Bearer {$token}"])
+        ->getJson('/api/me')
+        ->assertUnauthorized();
+});
+
 it('forbids registrar from encoding grades', function () {
     $this->seed();
 

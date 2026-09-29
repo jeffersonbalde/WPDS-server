@@ -38,13 +38,23 @@ return [
             'report' => false,
         ],
 
+        // Uploaded files (avatars, etc.) served publicly. Uses local disk storage
+        // by default, or S3-compatible object storage (e.g. DigitalOcean Spaces)
+        // when AWS_ACCESS_KEY_ID is set — object storage persists across deploys,
+        // unlike local disk on ephemeral hosting.
         'public' => [
-            'driver' => 'local',
+            'driver' => env('AWS_ACCESS_KEY_ID') ? 's3' : 'local',
             'root' => storage_path('app/public'),
-            'url' => rtrim(env('APP_URL', 'http://localhost'), '/').'/storage',
+            'url' => env('AWS_URL') ?: rtrim(env('APP_URL', 'http://localhost'), '/').'/storage',
             'visibility' => 'public',
             'throw' => false,
             'report' => false,
+            'key' => env('AWS_ACCESS_KEY_ID'),
+            'secret' => env('AWS_SECRET_ACCESS_KEY'),
+            'region' => env('AWS_DEFAULT_REGION'),
+            'bucket' => env('AWS_BUCKET'),
+            'endpoint' => env('AWS_ENDPOINT'),
+            'use_path_style_endpoint' => env('AWS_USE_PATH_STYLE_ENDPOINT', false),
         ],
 
         's3' => [

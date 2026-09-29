@@ -12,3 +12,7 @@ Schedule::command('wpds:backup-run-scheduled')
     ->everyMinute()
     ->name('wpds-scheduled-backup')
     ->withoutOverlapping();
+
+Schedule::command('sanctum:prune-expired --hours=24')
+    ->daily()
+    ->name('sanctum-prune-expired-tokens');
