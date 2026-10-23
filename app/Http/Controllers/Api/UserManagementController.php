@@ -6,6 +6,7 @@ use App\Enums\UserRole;
 use App\Http\Controllers\Controller;
 use App\Models\AuditLog;
 use App\Models\ClassSection;
+use App\Models\GradeChangeRequest;
 use App\Models\StaffProfile;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
@@ -310,6 +311,68 @@ class UserManagementController extends Controller
         ]);
 
         return response()->json($user);
+    }
+
+    /**
+     * Permanently delete an account. Accounts that own academic records are refused so
+     * no class, grade, or student history is lost; deactivate those instead.
+     */
+    public function destroy(Request $request, User $user): JsonResponse
+    {
+        if ($request->user()->id === $user->id) {
+            return response()->json(['message' => 'You cannot delete your own account.'], 422);
+        }
+
+        $profile = null;
+
+        if ($user->role === UserRole::Student) {
+            $profile = $user->studentProfile;
+            if ($profile && ! $profile->deletionUsage()['can_delete']) {
+                return response()->json([
+                    'message' => 'This student has admission or grade records and cannot be deleted. Deactivate the account instead.',
+                ], 422);
+            }
+        } else {
+            $classes = ClassSection::where('teacher_id', $user->id)->count();
+            $changeRequests = GradeChangeRequest::where('requested_by', $user->id)->count();
+            if ($classes > 0 || $changeRequests > 0) {
+                return response()->json([
+                    'message' => "This account is linked to {$classes} class(es) and {$changeRequests} grade change request(s) and cannot be deleted. Reassign them or deactivate the account instead.",
+                ], 422);
+            }
+        }
+
+        $snapshot = [
+            'name' => $user->name,
+            'email' => $user->email,
+            'role' => $user->role->value,
+        ];
+
+        DB::transaction(function () use ($user, $profile) {
+            if ($user->getRawOriginal('avatar_path')) {
+                Storage::disk('public')->delete($user->getRawOriginal('avatar_path'));
+            }
+
+            DB::table('notifications')
+                ->where('notifiable_type', $user->getMorphClass())
+                ->where('notifiable_id', $user->id)
+                ->delete();
+
+            $user->tokens()->delete();
+            $profile?->delete();
+            $user->delete();
+        });
+
+        AuditLog::create([
+            'user_id' => $request->user()->id,
+            'action' => 'user.deleted',
+            'auditable_type' => User::class,
+            'auditable_id' => null,
+            'old_values' => $snapshot,
+            'ip_address' => $request->ip(),
+        ]);
+
+        return response()->json(['message' => 'User deleted.']);
     }
 
     public function resetPassword(Request $request, User $user): JsonResponse

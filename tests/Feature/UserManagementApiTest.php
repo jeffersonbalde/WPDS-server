@@ -9,6 +9,7 @@ use App\Models\Subject;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 
 uses(RefreshDatabase::class);
@@ -382,4 +383,85 @@ it('prevents IT from changing their own role or deactivating themselves', functi
             'is_active' => false,
         ])
         ->assertStatus(422);
+});
+
+it('lets IT delete a staff account and removes its photo and tokens', function () {
+    Storage::fake('public');
+    $it = usersItAccount();
+    $registrar = User::factory()->create(['role' => UserRole::Registrar, 'is_active' => true]);
+    StaffProfile::create(['user_id' => $registrar->id, 'employee_no' => 'REG-DEL-1']);
+    Storage::disk('public')->put('avatars/old.jpg', 'x');
+    $registrar->forceFill(['avatar_path' => 'avatars/old.jpg'])->save();
+    $registrar->createToken('test');
+
+    $this->actingAs($it, 'sanctum')
+        ->deleteJson("/api/users/{$registrar->id}")
+        ->assertOk()
+        ->assertJsonPath('message', 'User deleted.');
+
+    expect(User::find($registrar->id))->toBeNull()
+        ->and(StaffProfile::where('employee_no', 'REG-DEL-1')->exists())->toBeFalse()
+        ->and(DB::table('personal_access_tokens')->where('tokenable_id', $registrar->id)->exists())->toBeFalse();
+    Storage::disk('public')->assertMissing('avatars/old.jpg');
+    $this->assertDatabaseHas('audit_logs', ['action' => 'user.deleted', 'user_id' => $it->id]);
+});
+
+it('lets IT delete a student that has no admission or grade records', function () {
+    $it = usersItAccount();
+    $studentUser = User::factory()->create(['role' => UserRole::Student, 'is_active' => true]);
+    StudentProfile::create([
+        'user_id' => $studentUser->id,
+        'student_no' => 'DEL-0001',
+        'academic_level' => 'college',
+        'year_level' => 1,
+        'last_name' => 'DELETE',
+        'first_name' => 'ME',
+    ]);
+
+    $this->actingAs($it, 'sanctum')->deleteJson("/api/users/{$studentUser->id}")->assertOk();
+
+    expect(User::find($studentUser->id))->toBeNull()
+        ->and(StudentProfile::where('student_no', 'DEL-0001')->exists())->toBeFalse();
+});
+
+it('refuses to delete a student with admission records', function () {
+    $this->seed();
+    $it = User::where('email', 'it@westprime.edu')->firstOrFail();
+    $student = User::where('email', 'jefferson.balde@westprime.edu')->firstOrFail();
+
+    $this->actingAs($it, 'sanctum')
+        ->deleteJson("/api/users/{$student->id}")
+        ->assertStatus(422);
+
+    expect(User::find($student->id))->not->toBeNull();
+});
+
+it('refuses to delete a teacher who still owns classes', function () {
+    $this->seed();
+    $it = User::where('email', 'it@westprime.edu')->firstOrFail();
+    $teacher = User::where('email', 'teacher@westprime.edu')->firstOrFail();
+
+    $this->actingAs($it, 'sanctum')
+        ->deleteJson("/api/users/{$teacher->id}")
+        ->assertStatus(422)
+        ->assertJsonPath('message', fn ($m) => str_contains($m, 'class'));
+
+    expect(User::find($teacher->id))->not->toBeNull();
+});
+
+it('prevents IT from deleting their own account', function () {
+    $it = usersItAccount();
+
+    $this->actingAs($it, 'sanctum')->deleteJson("/api/users/{$it->id}")->assertStatus(422);
+
+    expect(User::find($it->id))->not->toBeNull();
+});
+
+it('forbids non-IT roles from deleting users', function () {
+    $registrar = User::factory()->create(['role' => UserRole::Registrar, 'is_active' => true]);
+    $victim = User::factory()->create(['role' => UserRole::Teacher, 'is_active' => true]);
+
+    $this->actingAs($registrar, 'sanctum')->deleteJson("/api/users/{$victim->id}")->assertForbidden();
+
+    expect(User::find($victim->id))->not->toBeNull();
 });

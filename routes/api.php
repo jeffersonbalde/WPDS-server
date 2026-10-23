@@ -175,6 +175,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/users/{user}', [UserManagementController::class, 'show']);
         Route::post('/users', [UserManagementController::class, 'store']);
         Route::put('/users/{user}', [UserManagementController::class, 'update']);
+        Route::delete('/users/{user}', [UserManagementController::class, 'destroy']);
         Route::post('/users/{user}/reset-password', [UserManagementController::class, 'resetPassword']);
         Route::post('/users/{user}/avatar', [UserManagementController::class, 'updateAvatar']);
         Route::delete('/users/{user}/avatar', [UserManagementController::class, 'destroyAvatar']);
