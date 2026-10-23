@@ -7,6 +7,7 @@ use App\Models\AuditLog;
 use App\Models\ClassSection;
 use App\Models\Grade;
 use App\Models\GradeSubmission;
+use App\Rules\PeriodGrade;
 use App\Services\GradeCalculator;
 use App\Support\StaffNotifier;
 use Illuminate\Http\JsonResponse;
@@ -35,19 +36,10 @@ class GradeController extends Controller
         $data = $request->validate([
             'grades' => ['required', 'array'],
             'grades.*.enrollment_subject_id' => ['required', 'exists:enrollment_subjects,id'],
-            'grades.*.prelim' => ['nullable', 'numeric', 'regex:/^\d+(\.\d{1,2})?$/'],
-            'grades.*.midterm' => ['nullable', 'numeric', 'regex:/^\d+(\.\d{1,2})?$/'],
-            'grades.*.semi_final' => ['nullable', 'numeric', 'regex:/^\d+(\.\d{1,2})?$/'],
-            'grades.*.final' => ['nullable', 'numeric', 'regex:/^\d+(\.\d{1,2})?$/'],
-        ], [
-            'grades.*.prelim.numeric' => 'Prelim must be a number.',
-            'grades.*.midterm.numeric' => 'Midterm must be a number.',
-            'grades.*.semi_final.numeric' => 'Semi-Final must be a number.',
-            'grades.*.final.numeric' => 'Final must be a number.',
-            'grades.*.prelim.regex' => 'Prelim must be a valid grade number.',
-            'grades.*.midterm.regex' => 'Midterm must be a valid grade number.',
-            'grades.*.semi_final.regex' => 'Semi-Final must be a valid grade number.',
-            'grades.*.final.regex' => 'Final must be a valid grade number.',
+            'grades.*.prelim' => ['nullable', new PeriodGrade('Prelim')],
+            'grades.*.midterm' => ['nullable', new PeriodGrade('Midterm')],
+            'grades.*.semi_final' => ['nullable', new PeriodGrade('Semi-Final')],
+            'grades.*.final' => ['nullable', new PeriodGrade('Final')],
         ]);
 
         $level = $classSection->subject->academic_level;
@@ -83,10 +75,17 @@ class GradeController extends Controller
                     }
 
                     if ($row[$field] === null || $row[$field] === '') {
-                        if ($grade->{$field} !== null) {
-                            $grade->{$field} = null;
+                        if ($grade->hasPeriodRecorded($field)) {
+                            $grade->setPeriodValue($field, null);
                             $touched = true;
                         }
+
+                        continue;
+                    }
+
+                    if (PeriodGrade::isNoGrade($row[$field])) {
+                        $grade->setPeriodNoGrade($field);
+                        $touched = true;
 
                         continue;
                     }
@@ -96,7 +95,7 @@ class GradeController extends Controller
                         abort(422, 'Invalid '.GradeSubmission::periodLabel($field).' grade for this academic level.');
                     }
 
-                    $grade->{$field} = $value;
+                    $grade->setPeriodValue($field, $value);
                     $touched = true;
                 }
 
@@ -121,6 +120,7 @@ class GradeController extends Controller
                     'auditable_id' => $grade->id,
                     'new_values' => array_filter([
                         ...$grade->only(['prelim', 'midterm', 'semi_final', 'final', 'final_grade', 'remarks']),
+                        ...array_filter($grade->only(['prelim_ng', 'midterm_ng', 'semi_final_ng', 'final_ng', 'final_grade_ng'])),
                         'student_name' => $studentName,
                         'student_no' => $profile?->student_no,
                         'subject_code' => $classSection->subject?->code,
@@ -183,8 +183,7 @@ class GradeController extends Controller
 
         $missing = [];
         foreach ($classSection->enrollmentSubjects as $enrollment) {
-            $value = $enrollment->grade?->{$period};
-            if ($value === null || $value === '') {
+            if (! $enrollment->grade?->hasPeriodRecorded($period)) {
                 $sp = $enrollment->admission?->studentProfile;
                 $missing[] = $sp ? trim("{$sp->last_name}, {$sp->first_name}") : "Enrollment #{$enrollment->id}";
             }

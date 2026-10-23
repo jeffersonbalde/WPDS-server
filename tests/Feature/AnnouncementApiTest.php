@@ -7,9 +7,9 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 
 uses(RefreshDatabase::class);
 
-function announcementRegistrar(): User
+function announcementAuthor(UserRole $role = UserRole::It): User
 {
-    return User::factory()->create(['role' => UserRole::Registrar, 'is_active' => true]);
+    return User::factory()->create(['role' => $role, 'is_active' => true]);
 }
 
 function announcementStudent(): User
@@ -17,10 +17,10 @@ function announcementStudent(): User
     return User::factory()->create(['role' => UserRole::Student, 'is_active' => true]);
 }
 
-it('lets a registrar create a draft announcement', function () {
-    $registrar = announcementRegistrar();
+it('lets IT create a draft announcement', function () {
+    $it = announcementAuthor();
 
-    $this->actingAs($registrar, 'sanctum')
+    $this->actingAs($it, 'sanctum')
         ->postJson('/api/announcements', [
             'title' => 'Enrollment reminder',
             'body' => 'Enrollment for the next term closes on Friday.',
@@ -32,10 +32,10 @@ it('lets a registrar create a draft announcement', function () {
     expect(Announcement::where('title', 'Enrollment reminder')->exists())->toBeTrue();
 });
 
-it('stamps published_at when a registrar creates a published announcement', function () {
-    $registrar = announcementRegistrar();
+it('lets a stakeholder create and publish an announcement', function () {
+    $stakeholder = announcementAuthor(UserRole::Stakeholder);
 
-    $this->actingAs($registrar, 'sanctum')
+    $this->actingAs($stakeholder, 'sanctum')
         ->postJson('/api/announcements', [
             'title' => 'Portal is live',
             'body' => 'Grades are now viewable online.',
@@ -44,19 +44,20 @@ it('stamps published_at when a registrar creates a published announcement', func
         ->assertCreated()
         ->assertJsonPath('is_published', true);
 
-    expect(Announcement::first()->published_at)->not->toBeNull();
+    expect(Announcement::first()->published_at)->not->toBeNull()
+        ->and(Announcement::first()->created_by)->toBe($stakeholder->id);
 });
 
 it('stamps published_at the first time a draft is published via update', function () {
-    $registrar = announcementRegistrar();
+    $it = announcementAuthor();
     $announcement = Announcement::create([
         'title' => 'Draft note',
         'body' => 'Draft body.',
         'is_published' => false,
-        'created_by' => $registrar->id,
+        'created_by' => $it->id,
     ]);
 
-    $this->actingAs($registrar, 'sanctum')
+    $this->actingAs($it, 'sanctum')
         ->putJson("/api/announcements/{$announcement->id}", [
             'title' => 'Draft note',
             'body' => 'Draft body.',
@@ -69,34 +70,36 @@ it('stamps published_at the first time a draft is published via update', functio
 });
 
 it('validates required title and body', function () {
-    $registrar = announcementRegistrar();
+    $it = announcementAuthor();
 
-    $this->actingAs($registrar, 'sanctum')
+    $this->actingAs($it, 'sanctum')
         ->postJson('/api/announcements', ['title' => '', 'body' => ''])
         ->assertUnprocessable()
         ->assertJsonValidationErrors(['title', 'body']);
 });
 
-it('lets a registrar delete an announcement', function () {
-    $registrar = announcementRegistrar();
-    $announcement = Announcement::create([
-        'title' => 'Temp',
-        'body' => 'Temp body.',
-        'created_by' => $registrar->id,
-    ]);
+it('lets IT and stakeholders delete an announcement', function () {
+    foreach ([UserRole::It, UserRole::Stakeholder] as $role) {
+        $user = announcementAuthor($role);
+        $announcement = Announcement::create([
+            'title' => 'Temp',
+            'body' => 'Temp body.',
+            'created_by' => $user->id,
+        ]);
 
-    $this->actingAs($registrar, 'sanctum')
-        ->deleteJson("/api/announcements/{$announcement->id}")
-        ->assertOk()
-        ->assertJsonPath('message', 'Announcement deleted.');
+        $this->actingAs($user, 'sanctum')
+            ->deleteJson("/api/announcements/{$announcement->id}")
+            ->assertOk()
+            ->assertJsonPath('message', 'Announcement deleted.');
 
-    expect(Announcement::find($announcement->id))->toBeNull();
+        expect(Announcement::find($announcement->id))->toBeNull();
+    }
 });
 
-it('forbids non-registrars from managing announcements', function () {
+it('forbids everyone except IT and stakeholders from managing announcements', function () {
     $announcement = Announcement::create(['title' => 'X', 'body' => 'Y']);
 
-    foreach ([UserRole::Teacher, UserRole::Student, UserRole::Admin] as $role) {
+    foreach ([UserRole::Registrar, UserRole::Teacher, UserRole::Student, UserRole::Admin] as $role) {
         $user = User::factory()->create(['role' => $role, 'is_active' => true]);
 
         $this->actingAs($user, 'sanctum')
@@ -115,29 +118,31 @@ it('forbids non-registrars from managing announcements', function () {
             ->getJson('/api/announcements')
             ->assertForbidden();
     }
+
+    expect(Announcement::count())->toBe(1);
 });
 
 it('returns only published announcements to the student feed, newest first', function () {
-    $registrar = announcementRegistrar();
+    $it = announcementAuthor();
     Announcement::create([
         'title' => 'Older published',
         'body' => 'Older.',
         'is_published' => true,
         'published_at' => now()->subDays(3),
-        'created_by' => $registrar->id,
+        'created_by' => $it->id,
     ]);
     Announcement::create([
         'title' => 'Newer published',
         'body' => 'Newer.',
         'is_published' => true,
         'published_at' => now()->subDay(),
-        'created_by' => $registrar->id,
+        'created_by' => $it->id,
     ]);
     Announcement::create([
         'title' => 'Hidden draft',
         'body' => 'Draft.',
         'is_published' => false,
-        'created_by' => $registrar->id,
+        'created_by' => $it->id,
     ]);
 
     $response = $this->actingAs(announcementStudent(), 'sanctum')
@@ -158,16 +163,18 @@ it('forbids non-students from the announcement feed', function () {
         ->assertForbidden();
 });
 
-it('shows drafts and a summary in the registrar management list', function () {
-    $registrar = announcementRegistrar();
-    Announcement::create(['title' => 'Pub', 'body' => 'b', 'is_published' => true, 'published_at' => now(), 'created_by' => $registrar->id]);
-    Announcement::create(['title' => 'Draft', 'body' => 'b', 'is_published' => false, 'created_by' => $registrar->id]);
+it('shows drafts and a summary in the IT and stakeholder management list', function () {
+    $it = announcementAuthor();
+    Announcement::create(['title' => 'Pub', 'body' => 'b', 'is_published' => true, 'published_at' => now(), 'created_by' => $it->id]);
+    Announcement::create(['title' => 'Draft', 'body' => 'b', 'is_published' => false, 'created_by' => $it->id]);
 
-    $this->actingAs($registrar, 'sanctum')
-        ->getJson('/api/announcements?page=1&per_page=10')
-        ->assertOk()
-        ->assertJsonPath('total', 2)
-        ->assertJsonPath('summary.total', 2)
-        ->assertJsonPath('summary.published', 1)
-        ->assertJsonPath('summary.draft', 1);
+    foreach ([UserRole::It, UserRole::Stakeholder] as $role) {
+        $this->actingAs(announcementAuthor($role), 'sanctum')
+            ->getJson('/api/announcements?page=1&per_page=10')
+            ->assertOk()
+            ->assertJsonPath('total', 2)
+            ->assertJsonPath('summary.total', 2)
+            ->assertJsonPath('summary.published', 1)
+            ->assertJsonPath('summary.draft', 1);
+    }
 });

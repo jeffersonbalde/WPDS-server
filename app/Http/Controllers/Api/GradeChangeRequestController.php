@@ -7,6 +7,7 @@ use App\Models\AuditLog;
 use App\Models\Grade;
 use App\Models\GradeChangeRequest;
 use App\Models\GradeSubmission;
+use App\Rules\PeriodGrade;
 use App\Services\GradeCalculator;
 use App\Support\StaffNotifier;
 use Illuminate\Http\JsonResponse;
@@ -63,11 +64,8 @@ class GradeChangeRequestController extends Controller
         $data = $request->validate([
             'grade_id' => ['required', 'exists:grades,id'],
             'period_field' => ['required', Rule::in(['prelim', 'midterm', 'semi_final', 'final'])],
-            'new_value' => ['required', 'numeric', 'regex:/^\d+(\.\d{1,2})?$/'],
+            'new_value' => ['required', new PeriodGrade('New value')],
             'reason' => ['required', 'string', 'min:5'],
-        ], [
-            'new_value.numeric' => 'New value must be a number.',
-            'new_value.regex' => 'New value must be a valid grade number.',
         ]);
 
         $grade = Grade::with('enrollmentSubject.classSection.subject')->findOrFail($data['grade_id']);
@@ -100,8 +98,9 @@ class GradeChangeRequestController extends Controller
             ], 422);
         }
 
+        $newIsNg = PeriodGrade::isNoGrade($data['new_value']);
         $level = $grade->enrollmentSubject->classSection->subject->academic_level;
-        if (! $this->calculator->validatePeriodGrade((float) $data['new_value'], $level)) {
+        if (! $newIsNg && ! $this->calculator->validatePeriodGrade((float) $data['new_value'], $level)) {
             return response()->json(['message' => 'Invalid grade value for academic level.'], 422);
         }
 
@@ -109,7 +108,9 @@ class GradeChangeRequestController extends Controller
             'grade_id' => $grade->id,
             'period_field' => $data['period_field'],
             'old_value' => $grade->{$data['period_field']},
-            'new_value' => $data['new_value'],
+            'old_is_ng' => (bool) $grade->{$data['period_field'].'_ng'},
+            'new_value' => $newIsNg ? null : $data['new_value'],
+            'new_is_ng' => $newIsNg,
             'reason' => $data['reason'],
             'status' => 'pending',
             'requested_by' => $user->id,
@@ -146,8 +147,13 @@ class GradeChangeRequestController extends Controller
             if ($data['status'] === 'approved') {
                 $grade = $gradeChangeRequest->grade()->with('enrollmentSubject.classSection.subject')->first();
                 $field = $gradeChangeRequest->period_field;
-                $old = $grade->only(['prelim', 'midterm', 'semi_final', 'final', 'final_grade', 'remarks']);
-                $grade->{$field} = $gradeChangeRequest->new_value;
+                $old = $grade->only(['prelim', 'midterm', 'semi_final', 'final', 'final_grade', 'remarks'])
+                    + array_filter($grade->only(['prelim_ng', 'midterm_ng', 'semi_final_ng', 'final_ng', 'final_grade_ng']));
+                if ($gradeChangeRequest->new_is_ng) {
+                    $grade->setPeriodNoGrade($field);
+                } else {
+                    $grade->setPeriodValue($field, (float) $gradeChangeRequest->new_value);
+                }
                 $grade->is_locked = true;
                 $grade->recalculate($this->calculator, $grade->enrollmentSubject->classSection->subject->academic_level);
                 $grade->save();
@@ -158,7 +164,8 @@ class GradeChangeRequestController extends Controller
                     'auditable_type' => Grade::class,
                     'auditable_id' => $grade->id,
                     'old_values' => $old,
-                    'new_values' => $grade->only(['prelim', 'midterm', 'semi_final', 'final', 'final_grade', 'remarks']),
+                    'new_values' => $grade->only(['prelim', 'midterm', 'semi_final', 'final', 'final_grade', 'remarks'])
+                        + array_filter($grade->only(['prelim_ng', 'midterm_ng', 'semi_final_ng', 'final_ng', 'final_grade_ng'])),
                     'ip_address' => $request->ip(),
                 ]);
             } else {

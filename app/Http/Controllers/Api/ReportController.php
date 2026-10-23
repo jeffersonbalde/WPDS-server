@@ -152,7 +152,7 @@ class ReportController extends Controller
                     $q->where('subject_id', (int) $subjectId);
                 }
             })
-            ->whereNotNull('final_grade');
+            ->where(fn (Builder $q) => $q->whereNotNull('final_grade')->orWhere('final_grade_ng', true));
 
         if ($programId = $request->query('program_id')) {
             $query->whereHas('enrollmentSubject.admission', fn (Builder $q) => $q->where('program_id', (int) $programId));
@@ -195,6 +195,7 @@ class ReportController extends Controller
                 'subject_code' => $grade->enrollmentSubject?->classSection?->subject?->code,
                 'teacher_name' => $grade->enrollmentSubject?->classSection?->teacher?->name,
                 'final_grade' => $grade->final_grade,
+                'final_grade_ng' => (bool) $grade->final_grade_ng,
                 'remarks' => $grade->remarks,
             ];
         });
@@ -295,7 +296,7 @@ class ReportController extends Controller
 
         $gradesQuery = Grade::query()
             ->whereHas('enrollmentSubject.classSection', fn ($q) => $q->where('school_term_id', $termId))
-            ->whereNotNull('final_grade');
+            ->where(fn (Builder $q) => $q->whereNotNull('final_grade')->orWhere('final_grade_ng', true));
 
         $total = (clone $gradesQuery)->count();
         $passed = (clone $gradesQuery)->where('remarks', 'PASSED')->count();
@@ -307,7 +308,7 @@ class ReportController extends Controller
             ->join('class_sections', 'class_sections.id', '=', 'enrollment_subjects.class_section_id')
             ->join('admissions', 'admissions.id', '=', 'enrollment_subjects.admission_id')
             ->where('class_sections.school_term_id', $termId)
-            ->whereNotNull('grades.final_grade');
+            ->where(fn ($q) => $q->whereNotNull('grades.final_grade')->orWhere('grades.final_grade_ng', true));
 
         $summaryColumns = [
             DB::raw('count(*) as total'),
@@ -355,6 +356,7 @@ class ReportController extends Controller
                     : null,
                 'subject_code' => $grade->enrollmentSubject?->classSection?->subject?->code,
                 'final_grade' => $grade->final_grade,
+                'final_grade_ng' => (bool) $grade->final_grade_ng,
             ]);
 
         return [

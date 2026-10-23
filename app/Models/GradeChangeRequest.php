@@ -11,7 +11,9 @@ class GradeChangeRequest extends Model
         'grade_id',
         'period_field',
         'old_value',
+        'old_is_ng',
         'new_value',
+        'new_is_ng',
         'reason',
         'status',
         'requested_by',
@@ -25,6 +27,8 @@ class GradeChangeRequest extends Model
         return [
             'old_value' => 'decimal:2',
             'new_value' => 'decimal:2',
+            'old_is_ng' => 'boolean',
+            'new_is_ng' => 'boolean',
             'reviewed_at' => 'datetime',
         ];
     }

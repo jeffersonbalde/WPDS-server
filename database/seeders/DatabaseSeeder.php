@@ -123,7 +123,7 @@ class DatabaseSeeder extends Seeder
      */
     private function seedAnnouncements(): void
     {
-        $registrarId = User::query()->where('role', UserRole::Registrar)->value('id');
+        $authorId = User::query()->where('role', UserRole::It)->value('id');
 
         $samples = [
             [
@@ -147,7 +147,7 @@ class DatabaseSeeder extends Seeder
         ];
 
         foreach ($samples as $sample) {
-            Announcement::create($sample + ['created_by' => $registrarId]);
+            Announcement::create($sample + ['created_by' => $authorId]);
         }
     }
 

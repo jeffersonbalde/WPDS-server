@@ -112,6 +112,7 @@ class GradeSubmissionController extends Controller
                     'student_no' => $sp?->student_no,
                     'name' => $sp ? trim("{$sp->last_name}, {$sp->first_name}") : '—',
                     'value' => $es->grade?->{$period},
+                    'is_ng' => (bool) $es->grade?->{$period.'_ng'},
                 ];
             })->values();
 

@@ -273,8 +273,7 @@ class AdmissionController extends Controller
 
         $admission->loadMissing('studentProfile');
         $studentName = trim(
-            ($admission->studentProfile?->last_name ?? '').', '.($admission->studentProfile?->first_name ?? '')
-        , ' ,');
+            ($admission->studentProfile?->last_name ?? '').', '.($admission->studentProfile?->first_name ?? ''), ' ,');
 
         Audit::write($request, 'admission.created', $admission, null, [
             'admission_number' => $admission->admission_number,
@@ -360,11 +359,13 @@ class AdmissionController extends Controller
             foreach ($periods as $period) {
                 if (! in_array($period, $released, true)) {
                     $grade->{$period} = null;
+                    $grade->{$period.'_ng'} = false;
                 }
             }
 
             if (count(array_intersect($periods, $released)) !== count($periods)) {
                 $grade->final_grade = null;
+                $grade->final_grade_ng = false;
                 $grade->remarks = null;
             }
         }
@@ -384,8 +385,7 @@ class AdmissionController extends Controller
             $admission->update(['status' => $data['status']]);
             $admission->loadMissing('studentProfile');
             $studentName = trim(
-                ($admission->studentProfile?->last_name ?? '').', '.($admission->studentProfile?->first_name ?? '')
-            , ' ,');
+                ($admission->studentProfile?->last_name ?? '').', '.($admission->studentProfile?->first_name ?? ''), ' ,');
 
             Audit::write($request, 'admission.status_updated', $admission, [
                 'status' => $oldStatus,
@@ -418,8 +418,7 @@ class AdmissionController extends Controller
 
         $admission->loadMissing('studentProfile');
         $studentName = trim(
-            ($admission->studentProfile?->last_name ?? '').', '.($admission->studentProfile?->first_name ?? '')
-        , ' ,');
+            ($admission->studentProfile?->last_name ?? '').', '.($admission->studentProfile?->first_name ?? ''), ' ,');
         $snapshot = [
             'admission_number' => $admission->admission_number,
             'student_profile_id' => $admission->student_profile_id,
@@ -458,8 +457,7 @@ class AdmissionController extends Controller
 
         $admission->loadMissing('studentProfile');
         $studentName = trim(
-            ($admission->studentProfile?->last_name ?? '').', '.($admission->studentProfile?->first_name ?? '')
-        , ' ,');
+            ($admission->studentProfile?->last_name ?? '').', '.($admission->studentProfile?->first_name ?? ''), ' ,');
 
         Audit::write($request, 'admission.subjects_enrolled', $admission, null, [
             'admission_number' => $admission->admission_number,
@@ -576,6 +574,10 @@ class AdmissionController extends Controller
                     ->orWhereNotNull('semi_final')
                     ->orWhereNotNull('final')
                     ->orWhereNotNull('final_grade')
+                    ->orWhere('prelim_ng', true)
+                    ->orWhere('midterm_ng', true)
+                    ->orWhere('semi_final_ng', true)
+                    ->orWhere('final_ng', true)
                     ->orWhere(function ($inner) {
                         $inner->whereNotNull('remarks')
                             ->where('remarks', '!=', '');

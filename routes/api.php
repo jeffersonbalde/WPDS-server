@@ -105,7 +105,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/announcements/feed', [AnnouncementController::class, 'feed'])
         ->middleware(EnsureUserHasRole::class.':student');
     Route::get('/announcements', [AnnouncementController::class, 'index'])
-        ->middleware(EnsureUserHasRole::class.':registrar');
+        ->middleware(EnsureUserHasRole::class.':it,stakeholder');
 
     Route::get('/grade-change-requests', [GradeChangeRequestController::class, 'index'])
         ->middleware(EnsureUserHasRole::class.':teacher,registrar,admin,stakeholder');
@@ -139,10 +139,6 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/school-terms/{schoolTerm}', [SchoolTermController::class, 'update']);
         Route::delete('/school-terms/{schoolTerm}', [SchoolTermController::class, 'destroy']);
 
-        Route::post('/announcements', [AnnouncementController::class, 'store']);
-        Route::put('/announcements/{announcement}', [AnnouncementController::class, 'update']);
-        Route::delete('/announcements/{announcement}', [AnnouncementController::class, 'destroy']);
-
         Route::post('/students', [StudentProfileController::class, 'store']);
         Route::delete('/students/{student}', [StudentProfileController::class, 'destroy']);
 
@@ -157,6 +153,13 @@ Route::middleware('auth:sanctum')->group(function () {
 
         Route::post('/grade-change-requests/{gradeChangeRequest}/review', [GradeChangeRequestController::class, 'review']);
         Route::post('/grade-submissions/{gradeSubmission}/review', [GradeSubmissionController::class, 'review']);
+    });
+
+    // Announcements are authored by IT and stakeholders only.
+    Route::middleware(EnsureUserHasRole::class.':it,stakeholder')->group(function () {
+        Route::post('/announcements', [AnnouncementController::class, 'store']);
+        Route::put('/announcements/{announcement}', [AnnouncementController::class, 'update']);
+        Route::delete('/announcements/{announcement}', [AnnouncementController::class, 'destroy']);
     });
 
     // Full student profile edit — Registrar (Students) and IT (User Management).

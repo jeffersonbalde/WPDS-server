@@ -676,7 +676,7 @@ class CurriculumController extends Controller
                 'admission.schoolTerm:id,name',
                 'admission.program:id,code',
                 'classSection:id,subject_id',
-                'grade:id,enrollment_subject_id,final_grade,remarks',
+                'grade:id,enrollment_subject_id,final_grade,final_grade_ng,remarks',
             ])
             ->orderByDesc('id')
             ->get();
@@ -707,6 +707,7 @@ class CurriculumController extends Controller
                 'program_code' => $enrollment->admission?->program?->code,
                 'year_level' => $enrollment->admission?->year_level,
                 'final_grade' => $fullyReleased ? $enrollment->grade?->final_grade : null,
+                'final_grade_ng' => $fullyReleased && (bool) $enrollment->grade?->final_grade_ng,
                 'remarks' => $fullyReleased ? $enrollment->grade?->remarks : null,
             ];
         }

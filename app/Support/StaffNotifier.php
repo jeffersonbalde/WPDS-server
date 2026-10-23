@@ -85,12 +85,14 @@ class StaffNotifier
         $subject = $change->grade?->enrollmentSubject?->classSection?->subject?->code ?? 'a subject';
         $periodLabel = GradeSubmission::periodLabel($change->period_field);
         $teacher = $change->requester?->name ?? 'A teacher';
+        $oldLabel = $change->old_is_ng ? 'NG' : ($change->old_value ?? '—');
+        $newLabel = $change->new_is_ng ? 'NG' : ($change->new_value ?? '—');
 
         Notification::send(self::activeRegistrars(), new SystemNotification(
             'grade_change.pending',
             'Grade change request',
             "{$teacher} requested a {$periodLabel} grade change for {$student} in {$subject} "
-                ."({$change->old_value} to {$change->new_value}). Approve or reject it.",
+                ."({$oldLabel} to {$newLabel}). Approve or reject it.",
             '/grade-approvals',
             ['grade_change_request_id' => $change->id],
         ));

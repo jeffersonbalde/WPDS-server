@@ -4,6 +4,7 @@ use App\Models\ClassSection;
 use App\Models\Grade;
 use App\Models\GradeSubmission;
 use App\Models\User;
+use App\Services\GradeCalculator;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
 uses(RefreshDatabase::class);
@@ -288,6 +289,164 @@ it('reports a returned count in the grade submissions summary', function () {
         ->assertOk();
 
     expect($res->json('summary.returned'))->toBeGreaterThan(0);
+});
+
+it('records NG as a period grade and fails the final grade with NG', function () {
+    $this->seed();
+    $section = activeTermSection('CS 232');
+    $enrollmentId = $section->enrollmentSubjects()->value('id');
+
+    $this->actingAs(teacherUser(), 'sanctum')->postJson("/api/class-sections/{$section->id}/grades", [
+        'grades' => [['enrollment_subject_id' => $enrollmentId, 'semi_final' => 'ng']],
+    ])->assertOk();
+
+    $grade = Grade::where('enrollment_subject_id', $enrollmentId)->firstOrFail();
+
+    expect($grade->semi_final)->toBeNull()
+        ->and($grade->semi_final_ng)->toBeTrue()
+        ->and($grade->final_grade)->toBeNull()
+        ->and($grade->final_grade_ng)->toBeTrue()
+        ->and($grade->remarks)->toBe('FAILED');
+});
+
+it('clears NG when a numeric grade replaces it', function () {
+    $this->seed();
+    $section = activeTermSection('CS 232');
+    $enrollmentId = $section->enrollmentSubjects()->value('id');
+
+    $this->actingAs(teacherUser(), 'sanctum')->postJson("/api/class-sections/{$section->id}/grades", [
+        'grades' => [['enrollment_subject_id' => $enrollmentId, 'semi_final' => 'NG']],
+    ])->assertOk();
+
+    $this->actingAs(teacherUser(), 'sanctum')->postJson("/api/class-sections/{$section->id}/grades", [
+        'grades' => [['enrollment_subject_id' => $enrollmentId, 'semi_final' => 1.75]],
+    ])->assertOk();
+
+    $grade = Grade::where('enrollment_subject_id', $enrollmentId)->firstOrFail();
+
+    expect((float) $grade->semi_final)->toBe(1.75)
+        ->and($grade->semi_final_ng)->toBeFalse()
+        ->and($grade->final_grade_ng)->toBeFalse();
+});
+
+it('rejects a grade that is neither a number nor NG', function () {
+    $this->seed();
+    $section = activeTermSection('CS 232');
+    $enrollmentId = $section->enrollmentSubjects()->value('id');
+
+    $this->actingAs(teacherUser(), 'sanctum')->postJson("/api/class-sections/{$section->id}/grades", [
+        'grades' => [['enrollment_subject_id' => $enrollmentId, 'semi_final' => 'abc']],
+    ])->assertUnprocessable()->assertJsonValidationErrors(['grades.0.semi_final']);
+});
+
+it('counts NG as a recorded grade when submitting a period', function () {
+    $this->seed();
+    $section = activeTermSection('CS 232');
+    $enrollmentIds = $section->enrollmentSubjects()->pluck('id');
+
+    $this->actingAs(teacherUser(), 'sanctum')->postJson("/api/class-sections/{$section->id}/grades", [
+        'grades' => $enrollmentIds->map(fn ($id) => [
+            'enrollment_subject_id' => $id,
+            'semi_final' => 'NG',
+        ])->all(),
+    ])->assertOk();
+
+    $this->actingAs(teacherUser(), 'sanctum')
+        ->postJson("/api/class-sections/{$section->id}/grades/submit", ['period' => 'semi_final'])
+        ->assertCreated();
+});
+
+it('hides an unreleased NG period from the student', function () {
+    $this->seed();
+    $student = User::where('email', 'jefferson.balde@westprime.edu')->firstOrFail();
+    $section = activeTermSection('CS 232');
+
+    $admission = $student->studentProfile->admissions()
+        ->whereHas('schoolTerm', fn ($q) => $q->where('is_active', true))
+        ->firstOrFail();
+
+    $grade = Grade::whereHas('enrollmentSubject', fn ($q) => $q
+        ->where('class_section_id', $section->id)
+        ->where('admission_id', $admission->id))->firstOrFail();
+    $grade->setPeriodNoGrade('semi_final');
+    $grade->recalculate(app(GradeCalculator::class), $section->subject->academic_level);
+    $grade->save();
+
+    $res = $this->actingAs($student, 'sanctum')->getJson("/api/admissions/{$admission->id}")->assertOk();
+    $row = collect($res->json('enrollment_subjects'))->firstWhere('class_section.subject.code', 'CS 232');
+
+    expect($row['grade']['semi_final_ng'])->toBeFalse()
+        ->and($row['grade']['final_grade_ng'])->toBeFalse()
+        ->and($row['grade']['remarks'])->toBeNull();
+});
+
+it('lets a teacher request a change from NG to a number and applies it on approval', function () {
+    $this->seed();
+    $section = activeTermSection('CS 116'); // fully released
+    $grade = Grade::whereHas('enrollmentSubject', fn ($q) => $q->where('class_section_id', $section->id))->firstOrFail();
+    $grade->setPeriodNoGrade('final');
+    $grade->recalculate(app(GradeCalculator::class), $section->subject->academic_level);
+    $grade->save();
+
+    expect($grade->fresh()->remarks)->toBe('FAILED');
+
+    $created = $this->actingAs(teacherUser(), 'sanctum')->postJson('/api/grade-change-requests', [
+        'grade_id' => $grade->id,
+        'period_field' => 'final',
+        'new_value' => 1.75,
+        'reason' => 'Student completed the make-up exam',
+    ])->assertCreated()
+        ->assertJsonPath('old_is_ng', true)
+        ->assertJsonPath('new_is_ng', false);
+
+    $this->actingAs(registrarUser(), 'sanctum')
+        ->postJson("/api/grade-change-requests/{$created->json('id')}/review", ['status' => 'approved'])
+        ->assertOk();
+
+    $fresh = $grade->fresh();
+    expect((float) $fresh->final)->toBe(1.75)
+        ->and($fresh->final_ng)->toBeFalse()
+        ->and($fresh->final_grade_ng)->toBeFalse()
+        ->and($fresh->final_grade)->not->toBeNull();
+});
+
+it('lets a teacher request NG for a released numeric grade', function () {
+    $this->seed();
+    $section = activeTermSection('CS 116');
+    $gradeId = Grade::whereHas('enrollmentSubject', fn ($q) => $q->where('class_section_id', $section->id))->value('id');
+
+    $created = $this->actingAs(teacherUser(), 'sanctum')->postJson('/api/grade-change-requests', [
+        'grade_id' => $gradeId,
+        'period_field' => 'final',
+        'new_value' => 'NG',
+        'reason' => 'Student did not take the final exam',
+    ])->assertCreated()->assertJsonPath('new_is_ng', true);
+
+    $this->actingAs(registrarUser(), 'sanctum')
+        ->postJson("/api/grade-change-requests/{$created->json('id')}/review", ['status' => 'approved'])
+        ->assertOk();
+
+    $fresh = Grade::findOrFail($gradeId);
+    expect($fresh->final)->toBeNull()
+        ->and($fresh->final_ng)->toBeTrue()
+        ->and($fresh->final_grade_ng)->toBeTrue()
+        ->and($fresh->remarks)->toBe('FAILED');
+});
+
+it('counts NG grades as failed in the academic performance report', function () {
+    $this->seed();
+    $section = activeTermSection('CS 116');
+    $grade = Grade::whereHas('enrollmentSubject', fn ($q) => $q->where('class_section_id', $section->id))->firstOrFail();
+    $grade->setPeriodNoGrade('final');
+    $grade->recalculate(app(GradeCalculator::class), $section->subject->academic_level);
+    $grade->save();
+
+    $admin = User::where('email', 'admin@westprime.edu')->firstOrFail();
+    $res = $this->actingAs($admin, 'sanctum')
+        ->getJson("/api/reports/performance?school_term_id={$section->school_term_id}")
+        ->assertOk();
+
+    expect(collect($res->json('at_risk'))->contains(fn ($row) => $row['final_grade_ng'] === true))->toBeTrue();
 });
 
 it('paginates the teacher grade submissions list and filters by term', function () {

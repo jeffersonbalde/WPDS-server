@@ -10,7 +10,7 @@ use Illuminate\Http\Request;
 class AnnouncementController extends Controller
 {
     /**
-     * Registrar-facing management list: every announcement, drafts included.
+     * IT / stakeholder management list: every announcement, drafts included.
      */
     public function index(Request $request): JsonResponse
     {

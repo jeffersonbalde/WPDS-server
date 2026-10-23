@@ -98,7 +98,6 @@ class DashboardController extends Controller
         return $query;
     }
 
-
     private function registrarSummary(DateRangeFilter $range): array
     {
         $students = $this->scoped(StudentProfile::query(), $range);
@@ -207,7 +206,9 @@ class DashboardController extends Controller
     {
         $grades = $this->scoped(Grade::query(), $range, 'updated_at');
         $totalGrades = (clone $grades)->count();
-        $completeGrades = (clone $grades)->whereNotNull('final_grade')->count();
+        $completeGrades = (clone $grades)
+            ->where(fn ($q) => $q->whereNotNull('final_grade')->orWhere('final_grade_ng', true))
+            ->count();
 
         $students = $this->scoped(StudentProfile::query(), $range);
         $college = (clone $students)->where('academic_level', 'college')->count();
