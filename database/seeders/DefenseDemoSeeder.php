@@ -27,7 +27,10 @@ class DefenseDemoSeeder extends Seeder
 {
     public const DEMO_NAME = 'Aaron N. Laride';
 
-    /** Set by tests; otherwise the password comes from DEFENSE_DEMO_PASSWORD or an interactive prompt. */
+    /** Same demo password every other seeder in this project uses. */
+    public const DEFAULT_PASSWORD = 'password';
+
+    /** Set by tests; otherwise DEFENSE_DEMO_PASSWORD, falling back to the default. */
     public static ?string $passwordOverride = null;
 
     /** @var array<string, array{0: UserRole, 1: string}> email => [role, employee no] */
@@ -59,10 +62,10 @@ class DefenseDemoSeeder extends Seeder
     {
         $password = self::$passwordOverride
             ?? (string) env('DEFENSE_DEMO_PASSWORD', '')
-            ?: (string) $this->command?->secret('Password to set on the demo accounts');
+            ?: self::DEFAULT_PASSWORD;
 
         if (strlen($password) < 8) {
-            throw new \RuntimeException('Provide a demo password of at least 8 characters (DEFENSE_DEMO_PASSWORD or the prompt).');
+            throw new \RuntimeException('The demo password must be at least 8 characters.');
         }
 
         return $password;

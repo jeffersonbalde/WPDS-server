@@ -9,7 +9,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 
 uses(RefreshDatabase::class);
 
-beforeEach(fn () => DefenseDemoSeeder::$passwordOverride = 'demo-test-pass');
+beforeEach(fn () => DefenseDemoSeeder::$passwordOverride = null);
 
 afterEach(fn () => DefenseDemoSeeder::$passwordOverride = null);
 
@@ -31,7 +31,7 @@ it('names every demo staff account after the presenter and lets each one log in'
             ->and($user->role->value)->toBe($role)
             ->and($user->is_active)->toBeTrue();
 
-        $this->postJson('/api/login', ['email' => $email, 'password' => 'demo-test-pass'])
+        $this->postJson('/api/login', ['email' => $email, 'password' => 'password'])
             ->assertOk()
             ->assertJsonPath('user.role', $role);
     }
@@ -60,7 +60,7 @@ it('removes other non-student users but keeps students and hands their data to t
         ->and(User::where('role', '!=', UserRole::Student->value)->count())->toBe(5);
 });
 
-it('refuses a missing or too-short demo password and changes nothing', function () {
+it('refuses a too-short demo password and changes nothing', function () {
     $this->seed();
     $before = User::count();
     DefenseDemoSeeder::$passwordOverride = 'short';
