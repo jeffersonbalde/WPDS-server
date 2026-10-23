@@ -6,7 +6,9 @@ use App\Enums\UserRole;
 use App\Http\Controllers\Controller;
 use App\Models\AuditLog;
 use App\Models\ClassSection;
+use App\Models\Grade;
 use App\Models\GradeChangeRequest;
+use App\Models\GradeSubmission;
 use App\Models\StaffProfile;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
@@ -334,10 +336,17 @@ class UserManagementController extends Controller
             }
         } else {
             $classes = ClassSection::where('teacher_id', $user->id)->count();
-            $changeRequests = GradeChangeRequest::where('requested_by', $user->id)->count();
-            if ($classes > 0 || $changeRequests > 0) {
+            $changeRequests = GradeChangeRequest::query()
+                ->where(fn ($q) => $q->where('requested_by', $user->id)->orWhere('reviewed_by', $user->id))
+                ->count();
+            $submissions = GradeSubmission::query()
+                ->where(fn ($q) => $q->where('submitted_by', $user->id)->orWhere('reviewed_by', $user->id))
+                ->count();
+            $encodedGrades = Grade::where('encoded_by', $user->id)->count();
+
+            if ($classes + $changeRequests + $submissions + $encodedGrades > 0) {
                 return response()->json([
-                    'message' => "This account is linked to {$classes} class(es) and {$changeRequests} grade change request(s) and cannot be deleted. Reassign them or deactivate the account instead.",
+                    'message' => "This account has handled grading records ({$classes} class(es), {$submissions} grade submission(s), {$changeRequests} grade change request(s), {$encodedGrades} encoded grade(s)) and cannot be deleted, so the audit trail keeps its name. Deactivate the account instead.",
                 ], 422);
             }
         }

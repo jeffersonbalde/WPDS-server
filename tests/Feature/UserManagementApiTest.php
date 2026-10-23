@@ -465,3 +465,16 @@ it('forbids non-IT roles from deleting users', function () {
 
     expect(User::find($victim->id))->not->toBeNull();
 });
+
+it('refuses to delete a registrar who reviewed grade submissions', function () {
+    $this->seed();
+    $it = User::where('email', 'it@westprime.edu')->firstOrFail();
+    $registrar = User::where('email', 'registrar@westprime.edu')->firstOrFail();
+
+    $this->actingAs($it, 'sanctum')
+        ->deleteJson("/api/users/{$registrar->id}")
+        ->assertStatus(422)
+        ->assertJsonPath('message', fn ($m) => str_contains($m, 'Deactivate'));
+
+    expect(User::find($registrar->id))->not->toBeNull();
+});
